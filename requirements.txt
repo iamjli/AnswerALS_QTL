@@ -1,0 +1,11 @@
+# Local scripts
+-e dev/
+-e dev/tensorqtl
+-e dev/pyranges
+-e dev/OmicsIntegrator2
+
+# annotations
+biothings_client
+
+# utils
+swifter
