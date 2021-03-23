@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import re
+
 import pandas as pd
 import numpy as np
 import pyranges as pr
@@ -8,7 +10,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from . import BASE_DIR, CHROMS
+from . import BASE_DIR, CHROMS, logger
+
 # from .repository import _load_metadata, _load_bam_paths
 
 
@@ -19,24 +22,18 @@ class Genomic:
 
 	def __init__(self, vcf_path=None, metadata=None, bam_paths=None, rsid=None, R=None, initialize=False): 
 
-		self.vcf_path = vcf_path
-		self.metadata = metadata
-		self.bam_paths = bam_paths
-		self.rsid = rsid
 		self.R = R
 
-		if self.vcf_path is None: 
-			self.vcf_path = BASE_DIR / "tensorqtl/genomes/biallelic.harmonized.VQSR_filtered_99.rsID.vcf.gz"
-
 		if self.R is not None: 
-			self.metadata = self.R.metadata
+			self.vcf_path  = self.R.vcf_path
+			self.metadata  = self.R.metadata
 			self.bam_paths = self.R.bam_paths
-			self.rsid = self.R.rsid
+			# self.rsid      = self.R.rsid
 		else: 
 			from .repository import _load_metadata, _load_bam_paths, _load_rsid
-			self.metadata = _load_metadata()
+			self.metadata  = _load_metadata()
 			self.bam_paths = _load_bam_paths()
-			self.rsid = _load_rsid()
+			# self.rsid      = _load_rsid()
 
 		self.tbx = pysam.TabixFile(str(self.vcf_path))
 		# self._chr_prefix = "chr" in self.tbx.references[0]
@@ -51,6 +48,9 @@ class Genomic:
 		self._rna_bams_pysam = None
 		self._atac_bams_pysam = None
 
+		self._rna_library_sizes = None
+		self._atac_library_sizes = None
+
 		if initialize: 
 			self.rna_bams_pysam
 			self.atac_bams_pysam
@@ -61,8 +61,12 @@ class Genomic:
 	@property
 	def rna_bams_pysam(self): 
 		if self._rna_bams_pysam is None: 
-			print("Getting RNA bams as pysam objects.")
-			self._rna_bams_pysam = { guid:pysam.AlignmentFile(path, "rb") for guid,path in self.bam_paths["rna_bam"].items() }
+			_rna_bams_pysam = {}
+			for i,(guid,path) in enumerate(self.bam_paths["atac_bam"].items()): 
+				logger.update("Loading {} of {} RNA bams as pysam objects...".format(i, len(self.bam_paths)))
+				# _rna_bams_pysam[guid] = pysam.AlignmentFile(path, "rb")
+			logger.flush()
+			self._rna_bams_pysam = _rna_bams_pysam
 			return self._rna_bams_pysam
 		else: 
 			return self._rna_bams_pysam
@@ -70,11 +74,40 @@ class Genomic:
 	@property
 	def atac_bams_pysam(self): 
 		if self._atac_bams_pysam is None: 
-			print("Getting ATAC bams as pysam objects.")
-			self._atac_bams_pysam = { guid:pysam.AlignmentFile(path, "rb") for guid,path in self.bam_paths["atac_bam"].items() }
+			_atac_bams_pysam = {}
+			for i,(guid,path) in enumerate(self.bam_paths["atac_bam"].items()): 
+				logger.update("Loading {} of {} RNA bams as pysam objects...".format(i, len(self.bam_paths)))
+				# _atac_bams_pysam[guid] = pysam.AlignmentFile(path, "rb")
+			logger.flush()
+			self._atac_bams_pysam = _atac_bams_pysam
 			return self._atac_bams_pysam
 		else: 
 			return self._atac_bams_pysam
+
+	@property
+	def rna_library_sizes(self):
+		if self._rna_library_sizes is None: 
+			sizes = {}
+			for i,(guid,path) in enumerate(self.bam_paths["rna_bam"].iteritems()): 
+				logger.update("Scanning {} of {} RNA files for library_sizes...".format(i, len(self.bam_paths)))
+				results = pysam.idxstats(path)
+				sizes[guid] = np.array([row.split("\t")[2:] for row in results.rstrip("\n").split("\n")], dtype=int).sum()
+			logger.flush()
+			self._rna_library_sizes = pd.Series(sizes)
+		return self._rna_library_sizes
+
+	@property
+	def atac_library_sizes(self):
+		if self._atac_library_sizes is None: 
+			sizes = {}
+			for i,(guid,path) in enumerate(self.bam_paths["atac_bam"].iteritems()): 
+				logger.update("Scanning {} of {} ATAC files for library_sizes...".format(i, len(self.bam_paths)))
+				results = pysam.idxstats(path)
+				sizes[guid] = np.array([row.split("\t")[2:] for row in results.rstrip("\n").split("\n")], dtype=int).sum()
+			logger.flush()
+			self._atac_library_sizes = pd.Series(sizes)
+		return self._atac_library_sizes
+	
 
 	def _match_chrom_prefixes(self, bam_pysam, chrom): 
 		# Check format of chromosomes (i.e. if `chr1` or just `1`)
@@ -88,7 +121,6 @@ class Genomic:
 
 	def _get_coverage(self, bam_pysam, chrom, start, end, **kwargs): 
 		chrom = self._match_chrom_prefixes(bam_pysam, chrom)
-		# print(chrom, start, end)
 
 		try:
 			positions, pileup = zip(*[(result.pos, result.n) for result in bam_pysam.pileup(chrom, start, end)])
@@ -97,18 +129,36 @@ class Genomic:
 		except ValueError:
 			return pd.Series(data=0, index=np.arange(start, end))
 
-	def get_rna_coverage(self, chrom, start, end, w=0, norm_factors=1, **kwargs): 
+	def _get_coverages(self, bam_pysam_dic, chrom, start, end, **kwargs): 
+		coverages = {}
+		for i,(guid,bam) in enumerate(bam_pysam_dic.items()): 
+			logger.update("Loading coverage for {} of {} bams...".format(i, len(bam_pysam_dic)))
+			coverages[guid] = self._get_coverage(bam, chrom, start, end)
+		logger.flush()
+		results = pd.DataFrame.from_dict(coverages)
+		return Coverage(results)
+
+	def get_rna_coverage(self, chrom=None, start=None, end=None, region=None, w=0, norm_factors=1, **kwargs): 
 		"""Returns dataframe of read pileup with rows indexed by position and columns indexed by GUID."""
+		if region is not None: 
+			chrom, start, end = re.search(r'(.*):(\d*)-(\d*)', region).groups()
+			start, end = int(start), int(end)
 		start, end = start-w, end+w
 		results = pd.DataFrame.from_dict({ guid: self._get_coverage(bam, chrom, start, end) for guid,bam in self.rna_bams_pysam.items() })
 		results = results.div(norm_factors, axis=1)
-		return results
+		return Coverage(results)
 
-	def get_atac_coverage(self, chrom, start, end, norm_factors=1, **kwargs): 
+	def get_atac_coverage(self, chrom=None, start=None, end=None, region=None, w=0, norm_factors=1, **kwargs): 
 		"""Returns dataframe of read pileup with rows indexed by position and columns indexed by GUID."""
-		results = pd.DataFrame.from_dict({ guid: self._get_coverage(bam, chrom, start, end) for guid,bam in self.atac_bams_pysam.items() })
-		results = results.div(norm_factors, axis=1)
-		return results
+		if region is not None: 
+			chrom, start, end = re.search(r'(.*):(\d*)-(\d*)', region).groups()
+			start, end = int(start), int(end)
+		start, end = start-w, end+w
+
+		coverages = self._get_coverages(self.atac_bams_pysam, chrom, start, end)
+		coverages = coverages.div(norm_factors, axis=1)
+
+		return Coverage(coverages)
 
 	def plot_coverage_around_snp(self, omic, variant_id, w=2500, norm_factors=1, ax=None): 
 
@@ -163,7 +213,7 @@ class Genomic:
 		
 		gt = self.get_genotypes([rsid], as_df=False)[0]
 		if as_series: 
-			return pd.Series(data=gt, index=self.sample_names)
+			return pd.Series(data=gt, index=self.sample_names, name=rsid)
 		else: 
 			return gt
 
@@ -220,3 +270,34 @@ class Genomic:
 		return pd.Series(data=results.pvalue, index=maf_counts.columns)
 
 		# return stats.chisquare(maf_counts, f_exp=exp_counts, axis=0)
+
+
+from .omic import inverse_normal_transform
+
+class Coverage(pd.DataFrame): 
+
+	@property
+	def _constructor(self):
+		return Coverage
+
+	def normalize(self, norm_factors, inverse_norm_transform=True): 
+		df = self / norm_factors
+		if inverse_norm_transform: 
+			df = inverse_normal_transform(df)
+		return df
+
+	def residualize(self, residualizer): 
+		self_t = torch.tensor(self.values, dtype=torch.float).to("cpu")
+		return pd.DataFrame(residualizer.transform(self_t), index=self.index, columns=self.columns)
+
+	def bin(self, bin_size): 
+		df = self.groupby(self.index // bin_size).mean()
+		df.index = df.index * bin_size
+		return df
+
+
+
+
+
+
+

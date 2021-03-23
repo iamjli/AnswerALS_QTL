@@ -298,11 +298,16 @@ def read_phenotype_bed(phenotype_bed):
     else:
         raise ValueError('Unsupported file type.')
     phenotype_df.rename(columns={i:i.lower().replace('#chr','chr') for i in phenotype_df.columns[:3]}, inplace=True)
-    print("---USING ACTUAL TSS")
+    print("---USING ACTUAL TSS and midpoints")
 
     # create position dataframe
     if "strand" not in phenotype_df.columns: 
-        phenotype_pos_df = phenotype_df[['chr', 'end']].rename(columns={'end':'tss'})
+        # Use midpoint if strand is not specified (i.e. ATAC-seq)
+        phenotype_pos_df = phenotype_df[['chr', 'start', 'end']].copy()
+        phenotype_pos_df["tss"] = phenotype_pos_df[['start', 'end']].mean(axis=1).astype(int)
+        phenotype_pos_df = phenotype_pos_df[["chr", "tss"]]
+
+        # phenotype_pos_df = phenotype_df[['chr', 'end']].rename(columns={'end':'tss'})
         phenotype_df.drop(['chr', 'start', 'end'], axis=1, inplace=True)
         return phenotype_df, phenotype_pos_df
     else: 

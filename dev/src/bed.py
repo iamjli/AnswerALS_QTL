@@ -4,6 +4,78 @@ import pandas as pd
 import numpy as np
 import pyranges as pr
 
+from . import logger
+
+
+def pr_to_df(pr_obj, pos_cols=None): 
+	"""Converts pyranges object to pandas dataframe."""
+	if pos_cols is None: pos_cols = ["chrom", "start", "end", "strand"]
+
+	df = pr_obj.as_df().rename(columns={"Chromosome": pos_cols[0], "Start": pos_cols[1], "End": pos_cols[2], "Strand": pos_cols[3]})
+
+	if "gene_id" in df.columns: 
+		df = df.set_index("gene_id")
+		return RNARegions(df)
+	elif "peak_id" in df.columns: 
+		df = df.set_index("peak_id")
+		return ATACRegions(df)
+	else: 
+		logger.write("Format of `PyRangesRegions` object not recognized")
+
+
+class Regions(pd.DataFrame): 
+
+	# temporary properties
+	_internal_names = pd.DataFrame._internal_names + ["_omic", "_phen_id", "_pos_cols"]
+	_internal_names_set = set(_internal_names)
+
+	_pr,_tss,_tes,_mid = None, None, None, None
+
+	@property
+	def _constructor(self): 
+		if self.index.name == "gene_id": 
+			# Initialize as RNA-associated 
+			self._omic = "rna"
+			self._phen_id = "gene_id"
+			self._pos_cols = ["chrom", "start", "end", "strand"]
+		elif self.index.name == "peak_id": 
+			# Initialize as ATAC-associated 
+			self._omic = "atac"
+			self._phen_id = "peak_id"
+			self._pos_cols = ["chrom", "start", "end"]
+		else: 
+			pass
+			logger.write("Could not determine omic type.")
+		return Regions
+
+	@property
+	def pr(self):
+		"""Returns Regions dataframe as pyranges object."""
+		if self._pr is None: 
+			df = self.reset_index()
+			df = df[ self._pos_cols + df.columns.drop(self._pos_cols, errors="ignore").tolist() ]  # reorder columns
+			df.rename(columns={"chrom": "Chromosome", "start": "Start", "end": "End", "strand": "Strand"}, inplace=True)
+			self._pr = pr.PyRanges(df)
+		return self._pr
+
+	@property
+	def mid(self):
+		"""Returns midpoints as series."""
+		if self._mid is None: 
+			self._mid = self[["start", "end"]].mean(axis=1).astype(int)
+		return self._mid
+
+	def get_features_in_region(self, chrom, start, end): 
+		"""Gets Regions within a specified region."""
+		region = pr.from_dict({"Chromosome": [chrom], "Start": [start], "End": [end]})
+		overlaps = self.pr.overlap(region)
+		return pr_to_df(overlaps)
+	
+	def get_features_in_window(self, phen_id, w): 
+		"""Get Regions within window of specified phenotype."""
+		region = self.loc[[phen_id]].pr
+		overlaps = self.pr.overlap(region.slack(w))
+		return pr_to_df(overlaps)
 
 
 
@@ -29,16 +101,7 @@ def df_to_pr(df, pos_cols=None, include_index=True):
 		return pr.PyRanges(df)
 
 
-def pr_to_df(pr_obj, pos_cols=None, index=None): 
-	"""Converts pyranges object to pandas dataframe."""
-	if pos_cols is None: pos_cols = ["chrom", "start", "end", "strand"]
 
-	df = pr_obj.as_df().rename(columns={"Chromosome": pos_cols[0], "Start": pos_cols[1], "End": pos_cols[2], "Strand": pos_cols[3]})
-	if index is not None: 
-		df.set_index(index, inplace=True)
-		df = df[ pos_cols + df.columns.drop(pos_cols).tolist() ]  # reorder columns
-
-	return df
 
 
 
@@ -62,7 +125,7 @@ def get_point(regions, mode="tss"):
 		elif mode == "midpoint": 
 			regions["start"] = regions[["start", "end"]].mean(axis=1)
 		else: 
-			print("No valid mode specified.")
+			logger.write("No valid mode specified.")
 			return 
 		regions[["start", "end"]] = regions[["start", "end"]].astype(int)
 		return regions
@@ -78,36 +141,9 @@ def get_point(regions, mode="tss"):
 		elif mode == "midpoint": 
 			regions = regions.assign("midpoint", lambda df: ((df.Start + df.End)/2).astype(int))
 		else: 
-			print("No valid mode specified.")
+			logger.write("No valid mode specified.")
 			return 
 		return regions
-
-
-
-
-
-
-
-
-	# is_df = isinstance(regions, pd.DataFrame)
-
-	# if is_df: 
-	# 	index_name = regions.index.name
-	# 	regions = df_to_pr(regions)
-
-	# if mode == "tss": 
-	# 	assert "Strand" in regions.columns
-	# 	regions = regions.five_end()
-	# elif mode == "tes": 
-	# 	assert "Strand" in regions.columns
-	# 	regions = regions.three_end()
-	# else: 
-	# 	regions = regions.assign("midpoint", lambda df: ((df.Start + df.End)/2).astype(int))
-
-	# if is_df: 
-	# 	return pr_to_df(regions, index=index_name)
-	# else: 
-	# 	return regions
 
 # 	if is_pyranges: return bed_to_pr(regions_df)
 # 	else: return regions_df

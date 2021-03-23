@@ -4,11 +4,14 @@ import numpy as np
 import scipy.stats as stats
 import warnings
 
-from . import BASE_DIR, CHROMS
+from pathlib import Path
+
+from . import BASE_DIR, CHROMS, logger
+from .bed import Regions
 
 
 def load_omics(path, initialize=False): 
-	# print(np.__version__)
+
 	df = pd.read_csv(path, sep="\t", index_col=0, compression="gzip")
 
 	if df.index.name == "gene_id": 
@@ -49,10 +52,12 @@ class Omic:
 			self.regions.index = self.regions["chrom"] + ":" + self.regions["start"].astype(str) + "-" + self.regions["end"].astype(str)
 			self.regions.index.name = "peak_id"
 
+		self.regions = Regions(self.regions)
+
 		# compute lengths for TPM
 		if lengths is None: 
 			if self.omic == "rna":
-				print("Warning: lengths should be specified for RNA.")
+				logger.write("Warning: lengths should be specified for RNA.")
 			self.lengths = (self.regions["end"] - self.regions["start"]).astype(int).rename("lengths")
 		else: 
 			self.lengths = lengths.copy().rename("lengths")
@@ -81,18 +86,18 @@ class Omic:
 
 	@property
 	def mask(self):
-		n_samples = self.counts.shape[1]
+		n_threshold = self.counts.shape[1] * self.sample_frac_threshold
 
 		if self._mask is None: 
 			if self.omic == "rna": 
 				self._mask = (
-					((self.counts >= self.count_threshold).sum(axis=1) >= self.sample_frac_threshold * n_samples) & 
-					((self.tpm >= self.tpm_threshold).sum(axis=1) >= self.sample_frac_threshold * n_samples) & 
+					((self.counts >= self.count_threshold).sum(axis=1) >= n_threshold) & 
+					((self.tpm >= self.tpm_threshold).sum(axis=1) >= n_threshold) & 
 					(self.regions["chrom"].isin(CHROMS))
 				)
 			else: 
 				self._mask = (
-					((self.counts >= self.count_threshold).sum(axis=1) >= self.sample_frac_threshold * n_samples)
+					((self.counts >= self.count_threshold).sum(axis=1) >= n_threshold)
 				)
 		return self._mask
 	
@@ -103,12 +108,11 @@ class Omic:
 			self._tpm = tpm.div(tpm.sum() / 1e6, axis=1)
 		return self._tpm
 	
-
 	@property
 	def tmm(self):
 		"""edgeR normalization: normalize by library size and TMM factors."""
 		if self._tmm is None: 
-			print("Computing TMM matrix...")
+			logger.write("Computing TMM matrix...")
 			norm_factors = self.lib_norm_factors * self.tmm_norm_factors
 			self._tmm = self.counts / norm_factors
 		return self._tmm
@@ -131,7 +135,7 @@ class Omic:
 			if self.omic == "rna": 
 				self._lib_norm_factors = self.counts.sum(axis=0)
 			elif self.omic == "atac": 
-				self._lib_norm_factors = 1
+				self._lib_norm_factors = 1  # ATAC data has already been normalized by library size
 		return self._lib_norm_factors
 
 	def write_tensorqtl_phenotypes(self, output_dir): 
@@ -139,32 +143,38 @@ class Omic:
 		output_dir = Path(output_dir)
 		prefix = "{}_gtex".format(self.omic)
 
-		# df = pd.concat([self.regions, self.gtex], axis=1, join="inner")
-		# df = df.reset_index().rename(columns={"chrom": "#chr", self.regions.index.name:"gene_id"})
-		# df = df[["#chr", "start", "end", "gene_id"] + list(df.columns[4:])]
-		# df["#chr"] = df["#chr"].str[3:] # remove chromosome prefix
+		df = pd.concat([self.regions, self.gtex], axis=1, join="inner")
+		df = df.reset_index().rename(columns={"chrom": "#chr", self.regions.index.name:"gene_id"})
+		df = df[["#chr", "start", "end", "gene_id"] + list(df.columns[4:])]
+		df["#chr"] = df["#chr"].str[3:] # remove chromosome prefix
 
-		# df.to_csv(output_dir / "{}.bed.gz".format(prefix), sep="\t", index=False, compression="gzip")
-		# for chrom in df["#chr"].unique(): 
-		# 	df_chrom = df[df["#chr"] == chrom]
-		# 	df_chrom.to_csv(output_dir / "{}.chr{}.bed.gz".format(prefix, chrom), sep="\t", index=False, compression="gzip")
+		# Write phenotype files for tensorqtl
+		df.to_csv(output_dir / "{}.bed.gz".format(prefix), sep="\t", index=False, compression="gzip")
 
-		metadata = pd.concat([self.regions, self.lengths.rename("lengths")], axis=1, join="inner")
-		metadata.to_csv(output_dir / "{}.phenotype_metadata.txt.gz".format(prefix), sep="\t", index=True, compression="gzip")
+		# Write per-chromosome phenotype files for parallel processing
+		for chrom in df["#chr"].unique(): 
+			df_chrom = df[df["#chr"] == chrom]
+			df_chrom.to_csv(output_dir / "{}.chr{}.bed.gz".format(prefix, chrom), sep="\t", index=False, compression="gzip")
+
+		# Write phenotype file for gtex PEER pipeline. Remove strand column
+		df.drop(columns=["strand"], errors="ignore").to_csv(output_dir / "{}.for_PEER.bed.gz".format(prefix), sep="\t", index=False, compression="gzip")
 
 	def dump(self, output_dir): 
-
+		"""Dump contents to load later."""
 		output_dir = Path(output_dir)
-		prefix = "{}_gtex".format(self.omic)
+		file_name = "_{}_counts.omics_dump.txt.gz".format(self.omic)
 
 		df = pd.concat([
 			self.regions, 
 			self.lengths.rename("lengths"), 
 			self.counts
 		], axis=1)
-		return df
 
-		df.to_csv(output_dir / "{}.omics_dump.txt.gz".format(prefix), sep="\t", index=True, compression="gzip")
+		df.to_csv(output_dir / file_name, sep="\t", index=True, compression="gzip")
+		logger.write("Dumped counts and metadata to", output_dir / file_name)
+
+
+
 
 
 
@@ -199,7 +209,7 @@ def edgeR_calcNormFactors(counts, ref=None, logratio_trim=0.3, sum_trim=0.05, ac
         f75 = np.array([np.percentile(x,75) for x in (Y/np.sum(Y,axis=0)).T])
         ref = np.argmin(np.abs(f75-np.mean(f75)))
         if verbose:
-            print('Reference sample index: '+str(ref))
+            logger.write('Reference sample index: '+str(ref))
 
     N = np.sum(Y, axis=0)  # total reads in each library
 

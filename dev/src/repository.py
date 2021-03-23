@@ -7,7 +7,7 @@ from scipy import stats
 
 from pathlib import Path
 
-from . import BASE_DIR, CHROMS
+from . import BASE_DIR, CHROMS, logger
 
 
 
@@ -16,27 +16,35 @@ class Repository:
 	def __init__(self, base_dir=BASE_DIR): 
 
 		self.base_dir = BASE_DIR
+		self.vcf_path = BASE_DIR / "tensorqtl_runs/genomes/biallelic_snps.harmonized.VQSR_filtered_99.rsID.vcf.gz"
 
 		# sample metadata
 		self._metadata  = None	# GUID (index): sample metadata
 		self._bam_paths = None	# GUID (index): paths to bam files and counts
 		self._ALSC_metadata = None
 
+		# sample counts (phenotype data)
+		self._rna_metadata = None
+		# self._tensorqtl_rna = None
+		# self._tensorqtl_atac = None
+
 		# phenotype annotations
 		self._rsid   = None		# rsID (index): positions and metadata 
 		self._snp2tf = None		# rsID (index): TF and scores
 		self._ENSG   = None		# ensg (index): gene symbol
 
-		# GWAS metadata
-		self._PE_gwas = None	# psychENCODE GWAS
+		# GWAS
 		self._PM_gwas = None	# projectMinE GWAS
+
+		# eQTL 
+		self._PE_eqtl = None	# psychENCODE eQTL
 
 		# bed files
 		self._PE_enh = None		# psychENCODE enhancers
 
 		# gene lists
 		self._OT = None			# Open targets ALS gene list
-
+	
 	@property
 	def rsid(self):
 		if self._rsid is None: 
@@ -65,6 +73,16 @@ class Repository:
 		return self._bam_paths
 
 	@property
+	def rna_metadata(self):
+		if self._rna_metadata is None: 
+			df = pd.read_csv(self.base_dir / "tensorqtl_runs/phenotypes/_rna_counts.omics_dump.txt.gz", sep="\t", index_col=0, compression="gzip")
+			df = df.iloc[:,:5]
+			df["tss"] = df["start"].copy()
+			df.loc[df["strand"] == "-", "tss"] = df.loc[df["strand"] == "-", "end"]
+			self._rna_metadata = df
+		return self._rna_metadata
+
+	@property
 	def ALSC_metadata(self):
 		if self._ALSC_metadata is None: 
 			self._ALSC_metadata = _load_ALS_Consortium_metadata()
@@ -77,10 +95,10 @@ class Repository:
 		return self._OT
 
 	@property
-	def PE_gwas(self):
-		if self._PE_gwas is None: 
-			self._PE_gwas = _load_psychencode()
-		return self._PE_gwas
+	def PE_eqtl(self):
+		if self._PE_eqtl is None: 
+			self._PE_eqtl = _load_psychencode()
+		return self._PE_eqtl
 
 	@property
 	def PE_enh(self):
@@ -98,38 +116,39 @@ class Repository:
 
 def _load_ENSG():
 	"""Loads series of gene symbols indexed by ENSG."""
-	print("Loading ENSG...")
+	logger.write("Loading ENSG...")
 	path = BASE_DIR / "data/external/ENSG_to_symbol.tsv"
 	ENSG = pd.read_csv(path, sep="\t", names=["gene_id", "symbol"], skiprows=1)
 	return ENSG.set_index('gene_id')["symbol"]
 
 def _load_metadata():
 	"""Loads harmonized metadata."""
-	print("Loading sample metadata...")
-	path = BASE_DIR / "tensorqtl/harmonized_metadata.210313.txt" 
+	logger.write("Loading sample metadata...")
+	path = BASE_DIR / "tensorqtl_runs/harmonized_metadata.210321.txt" 
 	return pd.read_csv(path, sep="\t", index_col=0)
 
 def _load_bam_paths(): 
 	"""Loads bam paths for RNA and ATAC used in tensorqtl."""
-	print("Loading bam paths...")
-	path = BASE_DIR / "tensorqtl/harmonized_data_paths.210313.txt"
+	logger.write("Loading bam paths...")
+	path = BASE_DIR / "tensorqtl_runs/harmonized_data_paths.210321.txt"
 	return pd.read_csv(path, sep="\t", index_col=0)
 
 def _load_ALS_Consortium_metadata(): 
 	"""Loads ALS Consortium metadata."""
-	print("Loading ALS Consortium metadata...")
+	logger.write("Loading ALS Consortium metadata...")
 	path = BASE_DIR / "data/metadata/ALS Consortium DNA Metadata 20201015 .xlsx"
 	return pd.read_excel(path, sheet_name=0, engine="openpyxl")
 
 def _load_rsid(): 
 	"""See README.md for how this was generated. Section `Generate variant list`."""
-	print("Loading rsID file...")
-	path = BASE_DIR / "tensorqtl/genomes/snp_list_filtered.biallelic.harmonized.VQSR_filtered_99.rsID.parquet"
+	logger.write("Loading rsID file...")
+	path = BASE_DIR / "tensorqtl_runs/genomes/snp_list.biallelic_snps.harmonized.VQSR_filtered_99.rsID.parquet"
+	# path = BASE_DIR / "_tensorqtl_old/genomes/snp_list_filtered.biallelic.harmonized.VQSR_filtered_99.rsID.parquet"
 	return pd.read_parquet(path)
 
-def _load_snp2tf(): 
+def _load_snp2tf(collapse=True): 
 	"""Load TF annotations for SNPs."""
-	print("Loading snp2tf annotations...")
+	logger.write("Loading snp2tf annotations...")
 	path = BASE_DIR / "data/external/SNP2TF/snp2tfbs_JASPAR_CORE_2014_vert.bed.gz"
 
 	import gzip
@@ -153,7 +172,7 @@ def _load_snp2tf():
 	return results_df
 
 def _load_opentargets():
-	print("Loading OpenTargets gene list...")
+	logger.write("Loading OpenTargets gene list...")
 	path = BASE_DIR / "data/external/targets_associated_with_amyotrophic_lateral_sclerosis.csv"
 	als = pd.read_csv(path)
 	als.columns = als.columns.str.split(".").str[-1]
@@ -161,7 +180,7 @@ def _load_opentargets():
 	return als
 
 def _load_psychencode(): 
-	print("Loading psychENCODE GWAS...")
+	logger.write("Loading psychENCODE GWAS...")
 	path = BASE_DIR / "data/external/PsychENCODE/DER-08a_hg38_eQTL.significant.txt"
 	PE_eqtls = pd.read_csv(path, sep='\t', usecols=["gene_id", "SNP_id", "nominal_pval", "regression_slope", "top_SNP"])
 	PE_eqtls["SNP_id"] = "chr" + PE_eqtls["SNP_id"]
@@ -169,12 +188,12 @@ def _load_psychencode():
 	return PE_eqtls
 
 def _load_psychencode_enhancers(): 
-	print("Loading psychENCODE enhancers...")
+	logger.write("Loading psychENCODE enhancers...")
 	path = BASE_DIR / "data/external/PsychENCODE/DER-04a_hg38lft_PEC_enhancers.bed"
 	return pr.read_bed(str(path))
 
 def _load_project_mine(): 
-	print("Loading Project MinE GWAS...")
+	logger.write("Loading Project MinE GWAS...")
 	path = BASE_DIR / "data/external/Summary_Statistics_GWAS_2016/als.sumstats.lmm.parquet"
 	return pd.read_parquet(path)
 
