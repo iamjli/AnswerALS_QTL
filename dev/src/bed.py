@@ -1,26 +1,12 @@
 #!/usr/bin/env python3
 
+import re
+
 import pandas as pd
 import numpy as np
 import pyranges as pr
 
-from . import logger
-
-
-def pr_to_df(pr_obj, pos_cols=None): 
-	"""Converts pyranges object to pandas dataframe."""
-	if pos_cols is None: pos_cols = ["chrom", "start", "end", "strand"]
-
-	df = pr_obj.as_df().rename(columns={"Chromosome": pos_cols[0], "Start": pos_cols[1], "End": pos_cols[2], "Strand": pos_cols[3]})
-
-	if "gene_id" in df.columns: 
-		df = df.set_index("gene_id")
-		return RNARegions(df)
-	elif "peak_id" in df.columns: 
-		df = df.set_index("peak_id")
-		return ATACRegions(df)
-	else: 
-		logger.write("Format of `PyRangesRegions` object not recognized")
+from . import DATA, logger
 
 
 class Regions(pd.DataFrame): 
@@ -29,10 +15,11 @@ class Regions(pd.DataFrame):
 	_internal_names = pd.DataFrame._internal_names + ["_omic", "_phen_id", "_pos_cols"]
 	_internal_names_set = set(_internal_names)
 
-	_pr,_tss,_tes,_mid = None, None, None, None
+	_pr,_tss_pos,_tes_pos,_mid_pos,_ref = None, None, None, None, None
 
 	@property
 	def _constructor(self): 
+
 		if self.index.name == "gene_id": 
 			# Initialize as RNA-associated 
 			self._omic = "rna"
@@ -45,64 +32,150 @@ class Regions(pd.DataFrame):
 			self._pos_cols = ["chrom", "start", "end"]
 		else: 
 			pass
-			logger.write("Could not determine omic type.")
 		return Regions
+
+	@property
+	def omic(self):
+		if self.index.name == "gene_id": 
+			return "rna"
+		elif self.index.name == "peak_id": 
+			return "atac"
+		else: 
+			pass	
+
+	@property
+	def annotate(self):
+		if self.omic == "rna": 
+			return self.assign(symbol=self["gene_id"].map(DATA.ENSG))
 
 	@property
 	def pr(self):
 		"""Returns Regions dataframe as pyranges object."""
 		if self._pr is None: 
-			df = self.reset_index()
+			df = self.copy().reset_index()
 			df = df[ self._pos_cols + df.columns.drop(self._pos_cols, errors="ignore").tolist() ]  # reorder columns
 			df.rename(columns={"chrom": "Chromosome", "start": "Start", "end": "End", "strand": "Strand"}, inplace=True)
 			self._pr = pr.PyRanges(df)
 		return self._pr
 
-	@property
-	def mid(self):
-		"""Returns midpoints as series."""
-		if self._mid is None: 
-			self._mid = self[["start", "end"]].mean(axis=1).astype(int)
-		return self._mid
+	def stdout(self):
+		df = self.reset_index()[["chrom", "start", "end", self._phen_id]]
+		return df.to_string(index=False, header=False).lstrip().replace("\n ", "\\n").replace("  ", "\\t")	
 
+	@property
+	def sort(self):
+		return self.sort_values(["chrom", "start"])
+	
+	@property
+	def mid_pos(self):
+		"""Returns midpoints as series."""
+		if self._mid_pos is None: 
+			self._mid_pos = self[["start", "end"]].mean(axis=1).astype(int)
+		return self._mid_pos
+
+	@property
+	def tss_pos(self):
+		if self._tss_pos is None: 
+			assert "strand" in self.columns
+			tss_pos = self.start.copy()
+			tss_pos.loc[self["strand"] == "-"] = self["end"]
+			self._tss_pos = tss_pos.astype(int)
+		return self._tss_pos
+
+	@property
+	def ref_pos(self): 
+		if self.omic == "rna": 
+			return self.tss_pos
+		else: 
+			return self.mid_pos
+
+	@property
+	def ref(self):
+		if self._ref is None: 
+			df = self.copy()
+			df["start"] = self.ref_pos
+			df["end"] = self.ref_pos+1
+			self._ref = Regions(df)
+		return self._ref
+	
 	def get_features_in_region(self, chrom, start, end): 
 		"""Gets Regions within a specified region."""
 		region = pr.from_dict({"Chromosome": [chrom], "Start": [start], "End": [end]})
 		overlaps = self.pr.overlap(region)
+		# return overlaps
 		return pr_to_df(overlaps)
 	
 	def get_features_in_window(self, phen_id, w): 
 		"""Get Regions within window of specified phenotype."""
-		region = self.loc[[phen_id]].pr
-		overlaps = self.pr.overlap(region.slack(w))
-		return pr_to_df(overlaps)
+		region = self.loc[phen_id]
+		return self.get_features_in_window_by_coord(**region, w=w)
+
+	def get_features_in_window_by_coord(self, chrom, start, end, strand=None, w=0):
+
+		query_pr = get_coords_as_pr(chrom, start, end, strand)
+		query_pos = get_reference_position(query_pr).as_df().iloc[0]["Start"]
+
+		overlaps = pr_to_df(self.pr.overlap(query_pr.slack(w)))
+		overlaps_pos = overlaps.ref_pos
+		overlaps["distance"] = overlaps_pos - query_pos
+		if strand == "+": 
+			overlaps["rel_distance"] = overlaps["distance"]
+		elif strand == "-": 
+			overlaps["rel_distance"] = overlaps["distance"] * -1
+		else: 
+			pass
+		return overlaps
+
+	def get_k_nearest_features_by_coord(self, chrom, start, end, strand=None, k=10): 
+		# get reference positions of query and regions
+		query_pos_pr = get_reference_position(get_coords_as_pr(chrom, start, end, strand))
+		regions_pos_pr = self.ref.pr
+
+		# get nearest
+		nearest = query_pos_pr.k_nearest(regions_pos_pr, k=k).as_df()
+		nearest_regions = self.reindex(nearest.iloc[:,-2])
+		nearest_regions["distance"] = nearest.iloc[:,-1].values
+		return nearest_regions.sort_values("distance")
+
+	def get_coords(self, phen_id): 
+		return self.loc[phen_id]
 
 
-
-def df_to_pr(df, pos_cols=None, include_index=True):
-	"""Converts pandas dataframe to pyranges object."""
-	df = df.copy()
-
-	if df.index.name == "variant_id":  # if this is a variant dataframe
-		assert "end" not in df.columns
-		df.rename(columns={"chrom": "Chromosome", "start": "Start", "pos": "Start"}, inplace=True)
-		df = df.assign(End=(df.Start + 1).astype(int)).reset_index()
-		df = df[ ["Chromosome", "Start", "End"] + df.columns.drop(["Chromosome", "Start", "End"]).tolist() ]
-		return pr.PyRanges(df)
-
+def get_coords_as_pr(chrom, start, end, strand=None): 
+	if strand == ".": 
+		strand = None
+	if strand: 
+		return pr.from_dict({"Chromosome": [chrom], "Start": [start], "End": [end], "Strand": [strand]})
 	else: 
-		if pos_cols is None: pos_cols = ["chrom", "start", "end", "strand"]
+		return pr.from_dict({"Chromosome": [chrom], "Start": [start], "End": [end]})
 
-		if include_index: 
-			df.reset_index(inplace=True)
-			df = df[ pos_cols + df.columns.drop(pos_cols).tolist() ]  # reorder columns
+def get_reference_position(pr_region): 
+	"""Get reference position for a set of coordinates"""
+	if pr_region.stranded: 
+		return pr_region.five_end()
+	else: 
+		region_s = pr_region.as_df().iloc[0]
+		mid = (region_s["Start"]+region_s["End"]) // 2
+		return pr.from_dict({"Chromosome": [region_s["Chromosome"]], "Start": [mid], "End": [mid+1]})
 
-		df.rename(columns={pos_cols[0]: "Chromosome", pos_cols[1]: "Start", pos_cols[2]: "End", pos_cols[3]: "Strand"}, inplace=True)
-		return pr.PyRanges(df)
+
+def pr_to_df(pr_obj, pos_cols=None): 
+	"""Converts pyranges object to pandas dataframe."""
+	if pos_cols is None: pos_cols = ["chrom", "start", "end", "strand"]
+
+	df = pr_obj.as_df().rename(columns={"Chromosome": pos_cols[0], "Start": pos_cols[1], "End": pos_cols[2], "Strand": pos_cols[3]})
+
+	if "gene_id" in df.columns: 
+		df = df.set_index("gene_id")
+		return Regions(df)
+	elif "peak_id" in df.columns: 
+		df = df.set_index("peak_id")
+		return Regions(df)
+	else: 
+		logger.write("Format of `PyRanges` object not recognized")
 
 
-
-
+	
 
 
 ## single operations
@@ -145,24 +218,14 @@ def get_point(regions, mode="tss"):
 			return 
 		return regions
 
-# 	if is_pyranges: return bed_to_pr(regions_df)
-# 	else: return regions_df
 
-# def get_midpoint(regions): 
 
-# 	is_pyranges = isinstance(regions, pr.PyRanges)
 
-# 	if is_pyranges: 
-# 		regions_df = df_to_pr(regions)
-# 	else: 
-# 		regions_df = regions.copy()
 
-# 	regions_df.loc["midpoint"] = regions_df.pos_df[["start", "end"]].mean(axis=1).astype(int)
 
-# 	if is_pyranges: return bed_to_pr(regions_df)
-# 	else: return regions_df
 
-# def get_
+
+
 
 
 

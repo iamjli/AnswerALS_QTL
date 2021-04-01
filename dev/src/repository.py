@@ -10,7 +10,6 @@ from pathlib import Path
 from . import BASE_DIR, CHROMS, logger
 
 
-
 class Repository:
 
 	def __init__(self, base_dir=BASE_DIR): 
@@ -25,6 +24,8 @@ class Repository:
 
 		# sample counts (phenotype data)
 		self._rna_metadata = None
+		self._rna_tmm_norm_factors = None
+		self._atac_tmm_norm_factors = None
 		# self._tensorqtl_rna = None
 		# self._tensorqtl_atac = None
 
@@ -75,12 +76,24 @@ class Repository:
 	@property
 	def rna_metadata(self):
 		if self._rna_metadata is None: 
-			df = pd.read_csv(self.base_dir / "tensorqtl_runs/phenotypes/_rna_counts.omics_dump.txt.gz", sep="\t", index_col=0, compression="gzip")
+			df = pd.read_csv(self.base_dir / "tensorqtl_runs/phenotypes/_omics_dump.rna_counts.txt.gz", sep="\t", index_col=0, compression="gzip")
 			df = df.iloc[:,:5]
 			df["tss"] = df["start"].copy()
 			df.loc[df["strand"] == "-", "tss"] = df.loc[df["strand"] == "-", "end"]
 			self._rna_metadata = df
 		return self._rna_metadata
+
+	@property
+	def rna_tmm_norm_factors(self):
+		if self._rna_tmm_norm_factors is None: 
+			self._rna_tmm_norm_factors = pd.read_csv(self.base_dir / "tensorqtl_runs/phenotypes/_omics_dump.rna_tmm_norm_factors.txt.gz", sep="\t", index_col=0, compression="gzip").iloc[:,0]
+		return self._rna_tmm_norm_factors
+
+	@property
+	def atac_tmm_norm_factors(self):
+		if self._atac_tmm_norm_factors is None: 
+			self._atac_tmm_norm_factors = pd.read_csv(self.base_dir / "tensorqtl_runs/phenotypes/_omics_dump.rna_tmm_norm_factors.txt.gz", sep="\t", index_col=0, compression="gzip").iloc[:,0]
+		return self._atac_tmm_norm_factors
 
 	@property
 	def ALSC_metadata(self):
@@ -130,7 +143,7 @@ def _load_metadata():
 def _load_bam_paths(): 
 	"""Loads bam paths for RNA and ATAC used in tensorqtl."""
 	logger.write("Loading bam paths...")
-	path = BASE_DIR / "tensorqtl_runs/harmonized_data_paths.210321.txt"
+	path = BASE_DIR / "tensorqtl_runs/harmonized_data_paths.210323.txt"
 	return pd.read_csv(path, sep="\t", index_col=0)
 
 def _load_ALS_Consortium_metadata(): 
@@ -199,5 +212,47 @@ def _load_project_mine():
 
 
 
+def load_rna_forward_counts_at_peaks(): 
+	counts_path = BASE_DIR / "deeptools/rna_multicov_at_peaks.forward.readCounts.tab"
+
+	counts_df = pd.read_csv(counts_path, sep="\t")
+	counts_df.columns = counts_df.columns.str.replace("'", "")
+	counts_df.rename(columns={counts_df.columns[0]: "chrom"}, inplace=True)
+	counts_df.rename(columns={col:col.split("-")[1] for col in counts_df.columns[3:]}, inplace=True)
+	counts_df["chrom"] = "chr"+counts_df.astype(str)
+
+	counts_regions_df = pd.read_csv(BASE_DIR / "deeptools/atac_regions.bed", sep="\t", names=["chrom", "start", "end", "peak_id"], index_col=3)
+
+	counts_df = counts_regions_df.merge(counts_df, on=["chrom", "start", "end"]).set_index(counts_regions_df.index)
+	counts_df = counts_df.drop(columns=["chrom", "start", "end"])
+
+	return counts_df
+
+def load_rna_reverse_counts_at_peaks(): 
+	counts_path = BASE_DIR / "deeptools/rna_multicov_at_peaks.reverse.readCounts.tab"
+
+	counts_df = pd.read_csv(counts_path, sep="\t")
+	counts_df.columns = counts_df.columns.str.replace("'", "")
+	counts_df.rename(columns={counts_df.columns[0]: "chrom"}, inplace=True)
+	counts_df.rename(columns={col:col.split("-")[1] for col in counts_df.columns[3:]}, inplace=True)
+	counts_df["chrom"] = "chr"+counts_df.astype(str)
+
+	counts_regions_df = pd.read_csv(BASE_DIR / "deeptools/atac_regions.bed", sep="\t", names=["chrom", "start", "end", "peak_id"], index_col=3)
+
+	counts_df = counts_regions_df.merge(counts_df, on=["chrom", "start", "end"]).set_index(counts_regions_df.index)
+	counts_df = counts_df.drop(columns=["chrom", "start", "end"])
+
+	return counts_df
 
 
+
+
+
+
+# def _load_multiBamSummary(counts_path, regions_path): 
+# 	"""Loads multiBamSummary of counts."""
+# 	logger.write("Loading multiBamSummary...")
+
+
+# 	counts_path = BASE_DIR / "deeptools/{}.readCounts.tab".format(prefix)
+# 	counts_path = BASE_DIR / "deeptools/{}.readCounts.tab".format(prefix)

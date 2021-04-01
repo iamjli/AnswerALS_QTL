@@ -9,8 +9,6 @@ from scipy import interpolate, stats
 
 flatten = lambda l: [item for sublist in l for item in sublist]
 
-# CHROMS = ["chr"+str(i) for i in list(range(1,23))] + ["chrX", "chrY"]
-
 
 ## Mapping
 # ENSG = load_ENSG_to_symbol()
@@ -26,11 +24,6 @@ flatten = lambda l: [item for sublist in l for item in sublist]
 
 # def ENSG_to_symbol(df): 
 # 	return df.groupby(ENSG.reindex(df.index)).mean()
-
-def print_update(s): 
-
-	sys.stdout.write("\r{}".format(s))
-	sys.stdout.flush()
 
 class SimpleLogger(object):
 	def __init__(self, logfile=None, verbose=True):
@@ -51,23 +44,25 @@ class SimpleLogger(object):
 		# self.flush()
 		return True
 
-	def write(self, message):
-		if self.verbose:
+	def write(self, *message, verbose=True):
+		message = " ".join([str(m) for m in message])
+		if verbose:
 			self.console.write(message+"\n")
 		if self.log is not None:
 			self.log.write(message+'\n')
 			self.log.flush()
 
-	def update(self, message): 
-		if self.verbose: 
+	def update(self, *message, verbose=True): 
+		message = " ".join([str(m) for m in message])
+		if verbose: 
 			self.console.write("\r{}".format(message))
 			self.console.flush()
 		if self.log is not None: 
 			self.log.write(message+'\n')
 			self.log.flush()
 
-	def flush(self): 
-		if self.verbose: 
+	def flush(self, verbose=True): 
+		if verbose: 
 			self.console.write('\n')
 
 

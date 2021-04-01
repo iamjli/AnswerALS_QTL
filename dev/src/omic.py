@@ -10,28 +10,9 @@ from . import BASE_DIR, CHROMS, logger
 from .bed import Regions
 
 
-def load_omics(path, initialize=False): 
-
-	df = pd.read_csv(path, sep="\t", index_col=0, compression="gzip")
-
-	if df.index.name == "gene_id": 
-		omic = "rna"
-		regions = df[["chrom", "start", "end", "strand"]]
-		lengths = df["lengths"]
-		counts = df.iloc[:,5:]
-
-	if df.index.name == "peak_id": 
-		omic = "atac"
-		regions = df[["chrom", "start", "end"]]
-		lengths = df["lengths"]
-		counts = df.iloc[:,4:]
-
-	return Omic(omic, counts, regions, lengths, initialize)
-
-
 class Omic: 
 
-	def __init__(self, omic, counts, regions, lengths=None, initialize=False): 
+	def __init__(self, omic, counts, regions, lengths=None): 
 		"""Accept either raw counts, or phenotype file."""
 
 		assert (omic == "rna") or (omic == "atac")
@@ -53,6 +34,7 @@ class Omic:
 			self.regions.index.name = "peak_id"
 
 		self.regions = Regions(self.regions)
+		self.sample_names = self.counts.columns
 
 		# compute lengths for TPM
 		if lengths is None: 
@@ -79,10 +61,31 @@ class Omic:
 		self._tmm = None
 		self._gtex = None
 
-		if initialize: 
-			self.tmm
-			self.tpm
-			self.gtex
+	@classmethod
+	def load(cls, path):
+		path = Path(path)
+		counts_df = pd.read_csv(path, sep="\t", index_col=0, compression="gzip")
+
+		if counts_df.index.name == "gene_id": 
+			omic = "rna"
+			regions = counts_df[["chrom", "start", "end", "strand"]]
+			lengths = counts_df["lengths"]
+			counts = counts_df.iloc[:,5:]
+
+		if counts_df.index.name == "peak_id": 
+			omic = "atac"
+			regions = counts_df[["chrom", "start", "end"]]
+			lengths = counts_df["lengths"]
+			counts = counts_df.iloc[:,4:]
+
+		omic_obj = cls(omic, counts, regions, lengths)
+
+		# set normalization factors
+		tmm_norm_factors_path = path.parent / path.name.replace("_counts.txt.gz", "_tmm_norm_factors.txt.gz")
+		norm_factors = pd.read_csv(tmm_norm_factors_path, sep="\t", index_col=0, compression="gzip").iloc[:,0]
+		omic_obj._tmm_norm_factors = norm_factors
+
+		return omic_obj
 
 	@property
 	def mask(self):
@@ -97,7 +100,8 @@ class Omic:
 				)
 			else: 
 				self._mask = (
-					((self.counts >= self.count_threshold).sum(axis=1) >= n_threshold)
+					((self.counts >= self.count_threshold).sum(axis=1) >= n_threshold) &
+					((self.tpm >= self.tpm_threshold).sum(axis=1) >= n_threshold)
 				)
 		return self._mask
 	
@@ -112,7 +116,6 @@ class Omic:
 	def tmm(self):
 		"""edgeR normalization: normalize by library size and TMM factors."""
 		if self._tmm is None: 
-			logger.write("Computing TMM matrix...")
 			norm_factors = self.lib_norm_factors * self.tmm_norm_factors
 			self._tmm = self.counts / norm_factors
 		return self._tmm
@@ -126,7 +129,9 @@ class Omic:
 	@property
 	def tmm_norm_factors(self):
 		if self._tmm_norm_factors is None: 
-			self._tmm_norm_factors = edgeR_calcNormFactors(self.counts)
+			logger.write("Computing TMM norm factors...")
+			_tmm_norm_factors = edgeR_calcNormFactors(self.counts)
+			self._tmm_norm_factors = pd.Series(data=_tmm_norm_factors, index=self.sample_names)
 		return self._tmm_norm_factors
 
 	@property
@@ -135,7 +140,9 @@ class Omic:
 			if self.omic == "rna": 
 				self._lib_norm_factors = self.counts.sum(axis=0)
 			elif self.omic == "atac": 
-				self._lib_norm_factors = 1  # ATAC data has already been normalized by library size
+				# ATAC data has already been normalized by library size
+				# self._lib_norm_factors = pd.Series(data=1, index=self.sample_names)  
+				self._lib_norm_factors = self.counts.sum(axis=0)
 		return self._lib_norm_factors
 
 	def write_tensorqtl_phenotypes(self, output_dir): 
@@ -159,10 +166,10 @@ class Omic:
 		# Write phenotype file for gtex PEER pipeline. Remove strand column
 		df.drop(columns=["strand"], errors="ignore").to_csv(output_dir / "{}.for_PEER.bed.gz".format(prefix), sep="\t", index=False, compression="gzip")
 
-	def dump(self, output_dir): 
+	def dump(self, output_dir, prefix="_omics_dump"): 
 		"""Dump contents to load later."""
-		output_dir = Path(output_dir)
-		file_name = "_{}_counts.omics_dump.txt.gz".format(self.omic)
+		counts_file_path = Path(output_dir) / "{}.{}_counts.txt.gz".format(prefix, self.omic)
+		tmm_file_path = Path(output_dir) / "{}.{}_tmm_norm_factors.txt.gz".format(prefix, self.omic)
 
 		df = pd.concat([
 			self.regions, 
@@ -170,11 +177,12 @@ class Omic:
 			self.counts
 		], axis=1)
 
-		df.to_csv(output_dir / file_name, sep="\t", index=True, compression="gzip")
-		logger.write("Dumped counts and metadata to", output_dir / file_name)
-
-
-
+		df.to_csv(counts_file_path, sep="\t", index=True, compression="gzip")
+		logger.write("Dumped counts and metadata to {}".format(counts_file_path))
+		
+		self.tmm_norm_factors.to_csv(tmm_file_path, sep="\t", index=True, compression="gzip")
+		logger.write("Dumped norm factors to {}".format(tmm_file_path))
+		
 
 
 
@@ -244,9 +252,19 @@ def inverse_normal_transform(M):
     """
     Transform rows to a standard normal distribution
     """
-    R = stats.mstats.rankdata(M, axis=1)  # ties are averaged
+    # logger.write("Computing inverse normal transform...")
+    if isinstance(M, pd.Series): 
+    	M_ = M.to_frame().T
+    else: 
+    	M_ = M
+
+    R = stats.mstats.rankdata(M_, axis=1)  # ties are averaged
+    Q = stats.norm.ppf(R/(M_.shape[1]+1))
+
     if isinstance(M, pd.DataFrame):
-        Q = pd.DataFrame(stats.norm.ppf(R/(M.shape[1]+1)), index=M.index, columns=M.columns)
+    	return pd.DataFrame(Q, index=M.index, columns=M.columns)
+    elif isinstance(M, pd.Series): 
+    	return pd.Series(Q.squeeze(), index=M.index)
     else:
-        Q = stats.norm.ppf(R/(M.shape[1]+1))
+        Q = stats.norm.ppf(R/(M_.shape[1]+1))
     return Q

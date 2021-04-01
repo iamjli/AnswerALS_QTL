@@ -6,13 +6,13 @@ import numpy as np
 
 from scipy import interpolate, stats
 
-from . import CHROMS, logger
-from .bed import df_to_pr, pr_to_df
+from . import DATA, CHROMS, logger
 
 import torch
 from tensorqtl.core import impute_mean, calculate_corr
 from tensorqtl.cis import calculate_association
 from itertools import product
+
 
 class Residualizer(object):
 	"""
@@ -49,12 +49,12 @@ class Residualizer(object):
 		M_t_transformed = M_t - torch.mm(torch.mm(M0_t, self.Q_t), self.Q_t.t())  # keep original mean
 
 		if is_df: 
-			return pd.DataFrame(M_t_transformed, index=M.index, columns=M.columns)
+			return pd.DataFrame(M_t_transformed.numpy(), index=M.index, columns=M.columns)
 		else: 
 			return M_t_transformed
 
 
-def QTL_pairwise(genotypes_df, phenotypes_df, covariates_df, report_maf=False): 
+def QTL_pairwise(genotypes_df, phenotypes_df, covariates_df=None, report_maf=False): 
 	"""
 	Wrapper for `tensorqtl.core.calculate_corr` and reimplementation of `tensorqtl.cis.calculate_association`.
 	Sample names must be axis 0 for each input (i.e. index for pd.Series and columns for pd.DataFrame)
@@ -65,14 +65,19 @@ def QTL_pairwise(genotypes_df, phenotypes_df, covariates_df, report_maf=False):
 		phenotypes_df = phenotypes_df.to_frame().T
 
 	assert genotypes_df.columns.equals(phenotypes_df.columns)
-	assert genotypes_df.columns.equals(covariates_df.columns)
 
 	# Prepare variables as torch tensors
 	genotypes_t  = torch.tensor(genotypes_df.values, dtype=torch.float).to("cpu")
 	phenotypes_t = torch.tensor(phenotypes_df.values, dtype=torch.float).to("cpu")
 	impute_mean(genotypes_t)
 
-	residualizer = Residualizer(torch.tensor(covariates_df.T.values, dtype=torch.float32).to("cpu"))
+	if covariates_df is not None: 
+		assert genotypes_df.columns.equals(covariates_df.columns)
+		residualizer = Residualizer(torch.tensor(covariates_df.T.values, dtype=torch.float32).to("cpu"))
+		dof = residualizer.dof
+	else: 
+		residualizer = None
+		dof = genotypes_t.shape[1] - 2
 
 	# Compute pairwise correlations and associated stats
 	r_nominal_t, genotype_var_t, phenotype_var_t = calculate_corr(genotypes_t, phenotypes_t, residualizer=residualizer, return_var=True)
@@ -80,7 +85,7 @@ def QTL_pairwise(genotypes_df, phenotypes_df, covariates_df, report_maf=False):
 	r_nominal_t = r_nominal_t.squeeze()
 	r2_nominal_t = r_nominal_t.double().pow(2)
 	slope_t = r_nominal_t * std_ratio_t.squeeze()
-	tstat_t = r_nominal_t * torch.sqrt(residualizer.dof / (1 - r2_nominal_t))
+	tstat_t = r_nominal_t * torch.sqrt(dof / (1 - r2_nominal_t))
 	slope_se_t = (slope_t.double() / tstat_t).float()
 
 	# Prepare results as dataframe. 
@@ -90,9 +95,10 @@ def QTL_pairwise(genotypes_df, phenotypes_df, covariates_df, report_maf=False):
 		"phenotype_id": phenotype_ids, 
 		"tstat": tstat_t.flatten().numpy(), 
 		"slope": slope_t.flatten().numpy(),
-		"slope_se": slope_se_t.flatten().numpy()
+		"slope_se": slope_se_t.flatten().numpy(),
+		"r2": r2_nominal_t.flatten().numpy()
 	})
-	results["pval_nominal"] = 2*stats.t.cdf(-np.abs(results["tstat"]), residualizer.dof)
+	results["pval_nominal"] = 2*stats.t.cdf(-np.abs(results["tstat"]), dof)
 
 	if report_maf: 
 		# calculate MAF
@@ -112,7 +118,7 @@ def QTL_pairwise(genotypes_df, phenotypes_df, covariates_df, report_maf=False):
 		results["ma_samples"] = ma_samples_t.flatten().numpy()
 		results["ma_count"]   = ma_count_t.flatten().numpy()
 
-	return results
+	return results.sort_values("pval_nominal")
 
 def QTL_diff(genotypes_df, phenotypes_df, covariates_df, condition_s, report_maf=True): 
 
@@ -197,7 +203,7 @@ def QTL_by_pairs(G, omic_df, pairs, covariates_df, report_maf=False, condition_s
 
 class QTL:
 
-	def __init__(self, results_dir, omic, R=None, fdr=0.05, initialize=False): 
+	def __init__(self, results_dir, omic, fdr=0.05, initialize=False): 
 		# NOTE 3/19/21: tss distances may be off
 		# in original run, the start position was used for TSS for genes on negative strand
 		# after this was corrected, the signs for calculated distances are flipped for those on negative strand
@@ -207,7 +213,6 @@ class QTL:
 		self.results_dir = results_dir
 		self.omic = omic
 		self._fdr = fdr
-		self.R = R
 
 		if omic == "rna": 
 			self.phenotype_id = "gene_id"
@@ -253,16 +258,14 @@ class QTL:
 				df["peak_id"] = "chr" + df["peak_id"]
 
 		# annotate eQTLs with gene symbol
-		# if self.omic == "rna": 
-		# 	df["symbol"] = df["gene_id"].map(self.R.ENSG)
+		if self.omic == "rna": 
+			df["symbol"] = df["gene_id"].map(DATA.ENSG)
 
 		# correct TSS distance
 		if self.omic == "rna": 
 			logger.write("Recalculating distances")
-			# get gene and variant positional information
-			rna_metadata = self.R.rna_metadata
 			# adjust sign for TSS on negative strand.
-			strand = df["gene_id"].map(rna_metadata["strand"])
+			strand = df["gene_id"].map(DATA.rna_metadata["strand"])
 			df.loc[strand == "-", "tss_distance"] *= -1
 			df["tss_distance"] = df["tss_distance"].astype(int)
 
@@ -289,6 +292,7 @@ class QTL:
 	@property
 	def cis(self):
 		if self._cis is None: 
+			self._sig = None  # recalculate sig based on this dataframe
 			df = import_cis_nominal_results(self.results_dir, columns=["phenotype_id", "variant_id", "tss_distance", "pval_nominal", "slope"], filter_id=True)
 			self._cis = self._reformat_tensorqtl_outputs(df)
 		return self._cis
@@ -297,8 +301,14 @@ class QTL:
 	def leads(self):
 		# to be used for `cis_independent` mode.
 		if self._leads is None: 
-			df = import_cis_results(self.results_dir)
-			df = calculate_qvalues(df, fdr=self.fdr)
+			leads_file = self.results_dir / "cis_qtl.fdr_{}.txt.gz".format(str(self.fdr))
+			if leads_file.exists(): 
+				logger.write("Loading cis leads file with qvals from:", str(leads_file))
+				df = pd.read_csv(leads_file, sep="\t", index_col=0, compression="gzip")
+			else: 
+				logger.write("Generating cis leads with qvals...")
+				df = import_cis_results(self.results_dir)
+				df = calculate_qvalues(df, fdr=self.fdr)
 			self._leads = self._reformat_tensorqtl_outputs(df)
 		return self._leads
 
@@ -312,8 +322,14 @@ class QTL:
 	@property
 	def sig(self):
 		if self._sig is None: 
-			df = self.cis.loc[ self.cis["pval_nominal"] <= self.cis[self.phenotype_id].map(self.leads["pval_nominal_threshold"]) ]
-			self._sig = df.sort_values("pval_nominal")
+			sig_file = self.results_dir / "cis_qtl_nominal_sig.fdr_{}.txt.gz".format(str(self.fdr))
+			if sig_file.exists(): 
+				logger.write("Loading sig QTLs from file from:", str(sig_file))
+				sig = pd.read_csv(sig_file, sep="\t", compression="gzip")
+			else: 
+				df = self.cis.loc[ self.cis["pval_nominal"] <= self.cis[self.phenotype_id].map(self.leads["pval_nominal_threshold"]) ]
+				sig = df.sort_values("pval_nominal")
+			self._sig = QTLResults(sig)
 		return self._sig
 
 	@property
@@ -359,6 +375,16 @@ class QTL:
 			results.to_csv(path, sep="\t", index=True, header=True, compression="gzip") 
 
 		return results
+
+	def write_sig_qtl(self, path=None, write=True): 
+		"""
+		Writes list of significant QTLs in parsed format. 
+		"""
+		if write: 
+			if path is None: 
+				path = self.results_dir / "cis_qtl_nominal_sig.fdr_{}.txt.gz".format(str(self.fdr))
+			self.sig.to_csv(path, sep="\t", index=False, header=True, compression="gzip")
+
 
 
 ## Methods for QTL results
@@ -406,15 +432,14 @@ class QTLResults(pd.DataFrame):
 		start_idx, end_idx = self.phen_idx[phenotype_id]
 		return self.loc[start_idx:end_idx]
 
-	# @property
-	# def annotate(self): 
-	# 	assert self.omic == "rna"
-	# 	if "gene_id" in self.columns: 
-	# 		return self.assign(symbol=self["gene_id"].map(ENSG))
-	# 	elif self.index.name == "gene_id": 
-	# 		return self.assign(symbol=self.index.map(ENSG))
-	# 	else: 
-	# 		logger.write("Cannot annotate with gene symbol.")
+	@property
+	def annotate(self): 
+		if "gene_id" in self.columns: 
+			return self.assign(symbol=self["gene_id"].map(DATA.ENSG))
+		elif self.index.name == "gene_id": 
+			return self.assign(symbol=self.index.map(DATA.ENSG))
+		else: 
+			logger.write("Cannot annotate with gene symbol.")
 
 	@property
 	def sort_pval(self): 
@@ -731,60 +756,3 @@ def calculate_qvalues(res_df, fdr=0.05, qvalue_lambda=None, logger=False):
 	return pd.concat([res_df, stats_df], axis=1)
 
 
-
-# def tensorqtl_post(results_dir, fdr=0.05, write=True): 
-# 	"""
-# 	Ingests `cis` and `cis_nominal` results. Performs the following: 
-# 	 - merges `cis` results and adds columns 
-# 	 	 - `qval`: q-value for each top QTL
-# 	 	 - `pval_nominal_threshold`: p-value threshold for `cis_nominal` results
-# 	 - merges and filters `cis_nominal results`
-# 	"""
-
-# 	# Merge all lead cis results 
-# 	cis_df = import_cis_results(results_dir)
-
-# 	# Compute FDR and nominal p-value thresholds
-# 	cis_df = calculate_qvalues(cis_df, fdr=fdr)
-
-# 	# Merge and filter all variant-gene pairs
-# 	sig_qtls_df = []
-# 	for chrom in CHROMS: 
-# 		cis_nominal_df = import_cis_nominal_results(results_dir, chrom=chrom)
-
-# 		# Filter for significant pairs by checking if nominal pvalue is less than the threshold for the corresponding gene
-# 		sig_rows = cis_nominal_df["pval_nominal"] <= cis_nominal_df["phenotype_id"].map(cis_df["pval_nominal_threshold"])
-
-# 		logger.write("--", chrom)
-# 		logger.write("# total pairs:", len(cis_nominal_df))
-# 		logger.write("# significant (FDR < {}):".format(str(fdr)), sig_rows.sum())
-# 		sig_qtls_df.append(cis_nominal_df.loc[sig_rows])
-		
-# 	sig_qtls_df = pd.concat(sig_qtls_df).reset_index(drop=True)
-
-# 	if write: 
-# 		cis_df.to_csv("{}/cis_QTL.qval.txt".format(results_dir), sep="\t", index=True, header=True)
-# 		sig_qtls_df.to_csv("{}/cis_nominal_QTL.FDR_{}.txt".format(results_dir, str(fdr)), sep="\t", index=False, header=True)
-
-# 	return cis_df, sig_qtls_df
-
-
-
-# def import_all_snps(results_dir, chrom=None): 
-# 	"""Gets all SNPs used in `cis_nominal` mode."""
-# 	if chrom is None: 
-# 		chroms = CHROMS
-# 		logger.write("Importing all chromosomes. Could take a while.")
-# 	elif type(chrom) is not list: 
-# 		chroms = [chrom]
-# 	else: 
-# 		pass
-
-# 	from pathos.multiprocessing import ProcessingPool as Pool
-# 	def get_snps(chrom): 
-# 		cis_nominal_df = import_cis_nominal_results(results_dir, chrom=chrom)
-# 		return cis_nominal_df["variant_id"].unique().tolist()
-
-# 	with Pool() as pool:
-# 		results = pool.map(get_snps, chroms)
-# 	return flatten(results)
