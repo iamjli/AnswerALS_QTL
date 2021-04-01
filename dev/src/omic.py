@@ -6,14 +6,17 @@ import warnings
 
 from pathlib import Path
 
-from . import BASE_DIR, CHROMS, logger
+from . import BASE_DIR, RESULTS_PATHS, CHROMS, logger
 from .bed import Regions
 
 
 class Omic: 
 
 	def __init__(self, omic, counts, regions, lengths=None): 
-		"""Accept either raw counts, or phenotype file."""
+		"""
+		Accept either raw counts, or phenotype file.
+		 - for how counts were generated see sections 2.2 and 2.3: http://localhost:8894/notebooks/tensorqtl_runs/210321_prepare_tensorqtl.ipynb
+		"""
 
 		assert (omic == "rna") or (omic == "atac")
 		self.omic    = omic
@@ -86,6 +89,14 @@ class Omic:
 		omic_obj._tmm_norm_factors = norm_factors
 
 		return omic_obj
+
+	@classmethod
+	def load_rna(cls, dump_path=RESULTS_PATHS["rna_omic_dump"]): 
+		return cls.load(results_paths["rna_omic_dump"])
+
+	@classmethod
+	def load_atac(cls, dump_path=RESULTS_PATHS["atac_omic_dump"]): 
+		return cls.load(dump_path)
 
 	@property
 	def mask(self):

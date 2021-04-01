@@ -7,7 +7,7 @@ CHROMS = ["chr"+str(i) for i in list(range(1,23))] + ["chrX", "chrY"]
 from .utils import SimpleLogger
 logger = SimpleLogger()
 
-from .repository import Repository
+from .repository import Repository, RESULTS_PATHS 
 DATA = Repository(BASE_DIR)
 
 from .omic import Omic

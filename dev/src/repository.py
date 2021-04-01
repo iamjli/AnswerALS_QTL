@@ -10,12 +10,29 @@ from pathlib import Path
 from . import BASE_DIR, CHROMS, logger
 
 
+
+RESULTS_PATHS = {
+	"harmonized_metadata": 	BASE_DIR / "tensorqtl_runs/harmonized_metadata.210321.txt", 
+	"bams": 				BASE_DIR / "tensorqtl_runs/harmonized_data_paths.filtered.210331.txt",
+	"vcf": 					BASE_DIR / "tensorqtl_runs/genomes_210331/biallelic_snps.harmonized.VQSR_filtered_99.rsID.GT_only.vcf.gz",
+	"rsid": 				BASE_DIR / "tensorqtl_runs/genomes_210331/snp_list.biallelic_snps.harmonized.VQSR_filtered_99.rsID.GT_only.parquet", 
+	"rna_omic_dump": 		BASE_DIR / "tensorqtl_runs/phenotypes_210331/_omics_dump.rna_counts.txt.gz", 
+	"atac_omic_dump": 		BASE_DIR / "tensorqtl_runs/phenotypes_210331/_omics_dump.atac_counts.txt.gz", 
+	"rna_tmm_factors": 		BASE_DIR / "tensorqtl_runs/phenotypes_210331/_omics_dump.rna_tmm_norm_factors.txt.gz", 
+	"atac_tmm_factors": 	BASE_DIR / "tensorqtl_runs/phenotypes_210331/_omics_dump.atac_tmm_norm_factors.txt.gz", 
+	"rna_results_dir": 		BASE_DIR / "tensorqtl_runs/_210321_rna_gtex_maf01_PEER10_sex_condition/", 
+	"atac_results_dir": 	BASE_DIR / "tensorqtl_runs/_210321_atac_gtex_maf01_PEER10_sex_condition/", 
+}
+
+
 class Repository:
 
-	def __init__(self, base_dir=BASE_DIR): 
+	def __init__(self, results_paths=RESULTS_PATHS): 
 
-		self.base_dir = BASE_DIR
-		self.vcf_path = BASE_DIR / "tensorqtl_runs/genomes/biallelic_snps.harmonized.VQSR_filtered_99.rsID.vcf.gz"
+		self.results_paths = results_paths
+
+		# self.base_dir = BASE_DIR
+		# self.vcf_path = BASE_DIR / "tensorqtl_runs/genomes/biallelic_snps.harmonized.VQSR_filtered_99.rsID.vcf.gz"
 
 		# sample metadata
 		self._metadata  = None	# GUID (index): sample metadata
@@ -76,7 +93,7 @@ class Repository:
 	@property
 	def rna_metadata(self):
 		if self._rna_metadata is None: 
-			df = pd.read_csv(self.base_dir / "tensorqtl_runs/phenotypes/_omics_dump.rna_counts.txt.gz", sep="\t", index_col=0, compression="gzip")
+			df = pd.read_csv(self.results_paths["rna_omic_dump"], sep="\t", index_col=0, compression="gzip")
 			df = df.iloc[:,:5]
 			df["tss"] = df["start"].copy()
 			df.loc[df["strand"] == "-", "tss"] = df.loc[df["strand"] == "-", "end"]
@@ -86,13 +103,13 @@ class Repository:
 	@property
 	def rna_tmm_norm_factors(self):
 		if self._rna_tmm_norm_factors is None: 
-			self._rna_tmm_norm_factors = pd.read_csv(self.base_dir / "tensorqtl_runs/phenotypes/_omics_dump.rna_tmm_norm_factors.txt.gz", sep="\t", index_col=0, compression="gzip").iloc[:,0]
+			self._rna_tmm_norm_factors = pd.read_csv(self.results_paths["rna_tmm_factors"], sep="\t", index_col=0, compression="gzip").iloc[:,0]
 		return self._rna_tmm_norm_factors
 
 	@property
 	def atac_tmm_norm_factors(self):
 		if self._atac_tmm_norm_factors is None: 
-			self._atac_tmm_norm_factors = pd.read_csv(self.base_dir / "tensorqtl_runs/phenotypes/_omics_dump.rna_tmm_norm_factors.txt.gz", sep="\t", index_col=0, compression="gzip").iloc[:,0]
+			self._atac_tmm_norm_factors = pd.read_csv(self.results_paths["atac_tmm_factors"], sep="\t", index_col=0, compression="gzip").iloc[:,0]
 		return self._atac_tmm_norm_factors
 
 	@property
@@ -127,45 +144,49 @@ class Repository:
 
 
 
+EXTERNAL_PATHS = {
+	"ensg": 			BASE_DIR / "data/external/ENSG_to_symbol.tsv", 
+	"als_consortium": 	BASE_DIR / "data/metadata/ALS Consortium DNA Metadata 20201015 .xlsx",
+	"snp2tf": 			BASE_DIR / "data/external/SNP2TF/snp2tfbs_JASPAR_CORE_2014_vert.bed.gz",
+	"open_targets": 	BASE_DIR / "data/external/targets_associated_with_amyotrophic_lateral_sclerosis.csv", 
+	"pe_eqtl": 			BASE_DIR / "data/external/PsychENCODE/DER-08a_hg38_eQTL.significant.txt",
+	"pe_enhancers": 	BASE_DIR / "data/external/PsychENCODE/DER-04a_hg38lft_PEC_enhancers.bed", 
+	"project_mine": 	BASE_DIR / "data/external/Summary_Statistics_GWAS_2016/als.sumstats.lmm.parquet"
+}
+
 def _load_ENSG():
 	"""Loads series of gene symbols indexed by ENSG."""
 	logger.write("Loading ENSG...")
-	path = BASE_DIR / "data/external/ENSG_to_symbol.tsv"
-	ENSG = pd.read_csv(path, sep="\t", names=["gene_id", "symbol"], skiprows=1)
+	ENSG = pd.read_csv(EXTERNAL_PATHS["ensg"], sep="\t", names=["gene_id", "symbol"], skiprows=1)
 	return ENSG.set_index('gene_id')["symbol"]
 
 def _load_metadata():
 	"""Loads harmonized metadata."""
 	logger.write("Loading sample metadata...")
-	path = BASE_DIR / "tensorqtl_runs/harmonized_metadata.210321.txt" 
-	return pd.read_csv(path, sep="\t", index_col=0)
+	return pd.read_csv(RESULTS_PATHS["harmonized_metadata"], sep="\t", index_col=0)
 
 def _load_bam_paths(): 
 	"""Loads bam paths for RNA and ATAC used in tensorqtl."""
 	logger.write("Loading bam paths...")
-	path = BASE_DIR / "tensorqtl_runs/harmonized_data_paths.210323.txt"
-	return pd.read_csv(path, sep="\t", index_col=0)
+	return pd.read_csv(RESULTS_PATHS["bams"], sep="\t", index_col=0)
 
 def _load_ALS_Consortium_metadata(): 
 	"""Loads ALS Consortium metadata."""
 	logger.write("Loading ALS Consortium metadata...")
-	path = BASE_DIR / "data/metadata/ALS Consortium DNA Metadata 20201015 .xlsx"
-	return pd.read_excel(path, sheet_name=0, engine="openpyxl")
+	return pd.read_excel(EXTERNAL_PATHS["als_consortium"], sheet_name=0, engine="openpyxl")
 
 def _load_rsid(): 
 	"""See README.md for how this was generated. Section `Generate variant list`."""
 	logger.write("Loading rsID file...")
-	path = BASE_DIR / "tensorqtl_runs/genomes/snp_list.biallelic_snps.harmonized.VQSR_filtered_99.rsID.parquet"
 	# path = BASE_DIR / "_tensorqtl_old/genomes/snp_list_filtered.biallelic.harmonized.VQSR_filtered_99.rsID.parquet"
-	return pd.read_parquet(path)
+	return pd.read_parquet(RESULTS_PATHS["rsid"])
 
 def _load_snp2tf(collapse=True): 
 	"""Load TF annotations for SNPs."""
 	logger.write("Loading snp2tf annotations...")
-	path = BASE_DIR / "data/external/SNP2TF/snp2tfbs_JASPAR_CORE_2014_vert.bed.gz"
 
 	import gzip
-	with gzip.open(path, "r") as f: 
+	with gzip.open(EXTERNAL_PATHS["snp2tf"], "r") as f: 
 		if collapse: 
 			results = {}
 			for line in f: 
@@ -186,29 +207,25 @@ def _load_snp2tf(collapse=True):
 
 def _load_opentargets():
 	logger.write("Loading OpenTargets gene list...")
-	path = BASE_DIR / "data/external/targets_associated_with_amyotrophic_lateral_sclerosis.csv"
-	als = pd.read_csv(path)
+	als = pd.read_csv(EXTERNAL_PATHS["open_targets"])
 	als.columns = als.columns.str.split(".").str[-1]
 	als.set_index("symbol", inplace=True)
 	return als
 
 def _load_psychencode(): 
 	logger.write("Loading psychENCODE GWAS...")
-	path = BASE_DIR / "data/external/PsychENCODE/DER-08a_hg38_eQTL.significant.txt"
-	PE_eqtls = pd.read_csv(path, sep='\t', usecols=["gene_id", "SNP_id", "nominal_pval", "regression_slope", "top_SNP"])
+	PE_eqtls = pd.read_csv(EXTERNAL_PATHS["pe_eqtl"], sep='\t', usecols=["gene_id", "SNP_id", "nominal_pval", "regression_slope", "top_SNP"])
 	PE_eqtls["SNP_id"] = "chr" + PE_eqtls["SNP_id"]
 	PE_eqtls["gene_id"] = PE_eqtls["gene_id"].str.split(".").str[0]
 	return PE_eqtls
 
 def _load_psychencode_enhancers(): 
 	logger.write("Loading psychENCODE enhancers...")
-	path = BASE_DIR / "data/external/PsychENCODE/DER-04a_hg38lft_PEC_enhancers.bed"
-	return pr.read_bed(str(path))
+	return pr.read_bed(str(EXTERNAL_PATHS["pe_enhancers"]))
 
 def _load_project_mine(): 
 	logger.write("Loading Project MinE GWAS...")
-	path = BASE_DIR / "data/external/Summary_Statistics_GWAS_2016/als.sumstats.lmm.parquet"
-	return pd.read_parquet(path)
+	return pd.read_parquet(EXTERNAL_PATHS["project_mine"])
 
 
 

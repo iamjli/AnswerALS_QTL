@@ -6,7 +6,7 @@ import numpy as np
 
 from scipy import interpolate, stats
 
-from . import DATA, CHROMS, logger
+from . import DATA, RESULTS_PATH, CHROMS, logger
 
 import torch
 from tensorqtl.core import impute_mean, calculate_corr
@@ -232,6 +232,14 @@ class QTL:
 			self.sig
 			self.leads
 
+	@classmethod
+	def load_rna(cls, results_dir=RESULTS_PATH["rna_results_dir"], **kwargs): 
+		return cls(results_dir=rna_results_dir, omic="rna", **kwargs)
+
+	@classmethod
+	def load_atac(cls, results_dir=RESULTS_PATH["atac_results_dir"], **kwargs): 
+		return cls(results_dir=atac_results_dir, omic="atac", **kwargs)
+
 	@property
 	def fdr(self):
 		return self._fdr
@@ -268,20 +276,9 @@ class QTL:
 			strand = df["gene_id"].map(DATA.rna_metadata["strand"])
 			df.loc[strand == "-", "tss_distance"] *= -1
 			df["tss_distance"] = df["tss_distance"].astype(int)
-
-			# tss = df["gene_id"].map(rna_metadata["tss"])
-			# strand = df["gene_id"].map(rna_metadata["strand"])
-			# variant_pos = df["variant_id"].map(self.R.rsid["pos"])
-			# # distance of variant wrt gene. Negative values indicate upstream variant
-			# distance = variant_pos - tss
-			# distance.loc[strand == "-"] *= -1
-			# df["tss_distance"] = distance.copy()
 		else: 
 			# May need to correct for midpoint shift
 			pass
-
-		# sort by pvalue
-		# df = df.sort_values("pval_nominal")
 
 		if indexed_by_phenotype: 
 			df = df.set_index(self.phenotype_id)

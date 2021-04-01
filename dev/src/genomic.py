@@ -11,7 +11,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from . import DATA, BASE_DIR, CHROMS, logger
+from . import DATA, BASE_DIR, RESULTS_PATHS, CHROMS, logger
 from .qtl import QTL_pairwise, Residualizer
 from .utils import flatten
 
@@ -33,16 +33,11 @@ gt_to_dosage_dict = {'0/0':0, '0/1':1, '1/1':2, './.':np.nan,
 
 class BamQuery: 
 
-	def __init__(self, omic, bam_paths=DATA.bam_paths, initialize=True, prefiltered=False, max_cache=3): 
+	def __init__(self, omic, bam_paths, initialize=True, prefiltered=False, max_cache=3): 
 
 		self.omic = omic
+		self.bam_paths = bam_paths
 		self.prefiltered = prefiltered
-
-		if bam_paths is not None: 
-			if self.omic == "rna": 
-				self.bam_paths = bam_paths["rna_bam"]
-			else: 
-				self.bam_paths = bam_paths["atac_bam"]
 
 		self.sample_names = self.bam_paths.index
 
@@ -57,6 +52,14 @@ class BamQuery:
 			self.sam_files_dic
 			self.library_sizes	
 
+	@classmethod
+	def load_rna(cls, bam_paths=DATA.bam_paths, **kwargs): 
+		return cls(omic="rna", bam_paths=bam_paths["rna_bam"], **kwargs)
+
+	@classmethod
+	def load_atac(cls, bam_paths=DATA.bam_paths, **kwargs): 
+		return cls(omic="atac", bam_paths=bam_paths["atac_bam"], **kwargs)
+
 	def _update_coverage_cache(self, region, coverages):
 		self._coverage_cache[region] = coverages
 
@@ -66,8 +69,13 @@ class BamQuery:
 			del self._pileup_cache[next(iter(self._cache))]
 		self._pileup_cache[region] = pileups 
 
+	def _reset_caches(self): 
+		self._pileup_cache = OrderedDict()
+		self._coverage_cache = OrderedDict()
+
 	@property
 	def sam_files_dic(self): 
+		"""Dictionary of pysam objects."""
 		if self._sam_files_dic is None: 
 			_sam_files_dic = {}
 			for i,(guid,path) in enumerate(self.bam_paths.items()): 
@@ -81,6 +89,7 @@ class BamQuery:
 
 	@property
 	def library_sizes(self):
+		"""Total library size, including reads that don't pass QC."""
 		if self._library_sizes is None: 
 			sizes = {}
 			for i,(guid,path) in enumerate(self.bam_paths.iteritems()): 
@@ -94,7 +103,7 @@ class BamQuery:
 	## Genomic coverage operations
 	@staticmethod
 	def _match_chrom_prefix(pysam_obj, chrom): 
-		# Check format of chromosomes (i.e. if `chr1` or just `1`)
+		"""Returns the correctly formatted chromosome ID corresponding to a bam file (i.e. `chr1` vs. `1`)."""
 		if "chr" in pysam_obj.references[0]: 
 			if "chr" not in chrom: 
 				chrom = "chr" + str(chrom)
@@ -797,7 +806,7 @@ class Genomic:
 		self.DATA = DATA
 
 		if self.DATA is not None: 
-			self.vcf_path  = self.DATA.vcf_path
+			self.vcf_path  = RESULTS_PATHS["vcf"]
 			self.metadata  = self.DATA.metadata
 			self.bam_paths = self.DATA.bam_paths
 			self.rsid	  = self.DATA.rsid

@@ -4,9 +4,7 @@ import pandas as pd
 import numpy as np
 
 from src.bed import df_to_pr
-
-
-flatten = lambda l: [item for sublist in l for item in sublist]
+from src.utils import flatten
 
 
 def annotate_regions_uniquely(regions_pr, index_name, annotations, feature_order, fill_na=None): 
