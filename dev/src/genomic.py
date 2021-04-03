@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from . import DATA, BASE_DIR, RESULTS_PATHS, CHROMS, logger
+from .bed import Interval
 from .qtl import QTL_pairwise, Residualizer
 from .utils import flatten
 
@@ -20,23 +21,23 @@ gt_to_dosage_dict = {'0/0':0, '0/1':1, '1/1':2, './.':np.nan,
 					 '0|0':0, '0|1':1, '1|0':1, '1|1':2, '.|.':np.nan}
 
 
-# def parse_interval_args(func): 
-# 	"""Decorator to handle interval arguments."""
-# 	def _parse_interval_args(self, *args, **kwargs): 
-# 		verbose = kwargs.get("verbose", True)
-# 		interval = GenomicInterval.load(*args, **kwargs)
-# 		logger.write("Searching region {}".format(interval.region), verbose=verbose)
-# 		decorated = func(self, interval.chrom, interval.start, interval.end, interval.strand, **interval.kwargs)
-# 		return decorated
-# 	return _parse_interval_args
+def parse_interval_args(func): 
+	"""Decorator to allow interval arguments as opposed to specifying coordinates."""
+	def _interval_parser(self, *args, **kwargs): 
+		if type(args[0]).__name__ == "Interval": 
+			return func(self, **{**args[0].as_dict, **kwargs})
+		else:
+			return func(self, *args, **kwargs)
+	return _interval_parser
 
 
 class BamQuery: 
 
-	def __init__(self, omic, bam_paths, initialize=True, prefiltered=False, max_cache=3): 
+	def __init__(self, omic, bam_paths, residualizer=None, initialize=True, prefiltered=False, max_cache=3): 
 
 		self.omic = omic
 		self.bam_paths = bam_paths
+		self.residualizer = residualizer
 		self.prefiltered = prefiltered
 
 		self.sample_names = self.bam_paths.index
@@ -44,21 +45,26 @@ class BamQuery:
 		self._sam_files_dic = None
 		self._library_sizes = None
 
+		self.norm_factors = 1
+
 		self._max_cache = max_cache
 		self._pileup_cache = OrderedDict()
 		self._coverage_cache = OrderedDict()
 
 		if initialize: 
 			self.sam_files_dic
-			self.library_sizes	
 
 	@classmethod
 	def load_rna(cls, bam_paths=DATA.bam_paths, **kwargs): 
-		return cls(omic="rna", bam_paths=bam_paths["rna_bam"], **kwargs)
+		logger.write("Loading RNA bams specified in: {}".format(RESULTS_PATHS["bams"].relative_to(BASE_DIR)))
+		residualizer = Residualizer.load_rna()
+		return cls(omic="rna", bam_paths=bam_paths["rna_bam"], residualizer=residualizer, **kwargs)
 
 	@classmethod
 	def load_atac(cls, bam_paths=DATA.bam_paths, **kwargs): 
-		return cls(omic="atac", bam_paths=bam_paths["atac_bam"], **kwargs)
+		logger.write("Loading ATAC bams specified in: {}".format(RESULTS_PATHS["bams"].relative_to(BASE_DIR)))
+		residualizer = Residualizer.load_rna()
+		return cls(omic="atac", bam_paths=bam_paths["atac_bam"], residualizer=residualizer, **kwargs)
 
 	def _update_coverage_cache(self, region, coverages):
 		self._coverage_cache[region] = coverages
@@ -66,12 +72,15 @@ class BamQuery:
 	def _update_pileup_cache(self, region, pileups): 
 		"""Updates cache with pileups formated as a dict keyed by `pos` and `neg`."""
 		if len(self._pileup_cache) >= self._max_cache: 
-			del self._pileup_cache[next(iter(self._cache))]
+			del self._pileup_cache[next(iter(self._pileup_cache))]
 		self._pileup_cache[region] = pileups 
 
 	def _reset_caches(self): 
 		self._pileup_cache = OrderedDict()
 		self._coverage_cache = OrderedDict()
+
+	def set_norm_factors(self, norm_factors=1): 
+		self.norm_factors = norm_factors
 
 	@property
 	def sam_files_dic(self): 
@@ -144,56 +153,6 @@ class BamQuery:
 		# return counts relative to strand, if specified
 		return {"complete_overlap": complete_overlap, "any_overlap": any_overlap}
 
-	def get_coverages(self, chrom, start, end, strand=None, report_strand=None, normalize="lib_size", overlap="any", verbose=True):
-
-		# load data if cached, otherwise continue
-		region = "{}:{}-{}".format(chrom, start, end)
-		if region in self._coverage_cache: 
-			logger.write("Loading {} coverages from cache".format(self.omic))
-			coverages = self._coverage_cache[region]
-		else: 
-			coverages = {}
-			for i,(guid,bam) in enumerate(self.sam_files_dic.items()): 
-				logger.update("Loading {} bam coverages ({} of {})...".format(self.omic, i, len(self.sam_files_dic)), verbose=verbose)
-				coverages[guid] = self._get_coverage(bam, chrom, start, end)
-			logger.flush(verbose=verbose)
-			self._update_coverage_cache(region, coverages)
-
-		# report partial or complete overlaps
-		if overlap == "any": 
-			results = { guid:val["any_overlap"] for guid,val in coverages.items() }
-		elif overlap == "complete": 
-			results = { guid:val["complete_overlap"] for guid,val in coverages.items() }
-		else: 
-			logger.write("overlap argument must be `any` or `complete`")
-
-		# get results relative to strand
-		if strand == "-": 
-			pos_results = pd.Series({ guid:val["neg"] for guid,val in results.items() })
-			neg_results = pd.Series({ guid:val["pos"] for guid,val in results.items() })
-		else: 
-			pos_results = pd.Series({ guid:val["pos"] for guid,val in results.items() })
-			neg_results = pd.Series({ guid:val["neg"] for guid,val in results.items() })
-
-		if isinstance(normalize, pd.Series): 
-			norm_factor = normalize
-		elif normalize == "lib_size": 
-			norm_factor = self.library_sizes / self.library_sizes.median()
-		else: 
-			norm_factor = 1
-
-		pos_results /= norm_factor
-		neg_results /= norm_factor
-
-		if report_strand is None: 
-			return pos_results + neg_results
-		elif report_strand == "forward": 
-			return pos_results
-		elif report_strand == "reverse": 
-			return neg_results
-		else: 
-			return pos_results, neg_results
-
 	@staticmethod
 	def _get_pileup(pysam_obj, chrom, start, end, include_introns=False, prefiltered=False, **kwargs): 
 		"""
@@ -243,11 +202,68 @@ class BamQuery:
 
 		return {"pos": pos_counts, "neg": neg_counts}
 
-
-	def get_pileups(self, chrom, start, end, strand=None, report_strand=None, normalize="lib_size", include_introns=False, verbose=True): 
+	@parse_interval_args
+	def get_coverages(self, chrom, start, end, strand=None, report_strand=None, overlap="any", norm_factors=None, verbose=True):
 
 		# load data if cached, otherwise continue
 		region = "{}:{}-{}".format(chrom, start, end)
+		if region in self._coverage_cache: 
+			logger.write("Loading {} coverages from cache".format(self.omic))
+			coverages = self._coverage_cache[region]
+		else: 
+			coverages = {}
+			for i,(guid,bam) in enumerate(self.sam_files_dic.items()): 
+				logger.update("Loading {} bam coverages ({} of {})...".format(self.omic, i, len(self.sam_files_dic)), verbose=verbose)
+				coverages[guid] = self._get_coverage(bam, chrom, start, end)
+			logger.flush(verbose=verbose)
+			self._update_coverage_cache(region, coverages)
+
+		# report partial or complete overlaps
+		if overlap == "any": 
+			results = { guid:val["any_overlap"] for guid,val in coverages.items() }
+		elif overlap == "complete": 
+			results = { guid:val["complete_overlap"] for guid,val in coverages.items() }
+		else: 
+			logger.write("overlap argument must be `any` or `complete`")
+
+		# get results relative to strand
+		if strand == "-": 
+			pos_results = pd.Series({ guid:val["neg"] for guid,val in results.items() })
+			neg_results = pd.Series({ guid:val["pos"] for guid,val in results.items() })
+		else: 
+			pos_results = pd.Series({ guid:val["pos"] for guid,val in results.items() })
+			neg_results = pd.Series({ guid:val["neg"] for guid,val in results.items() })
+
+		if isinstance(norm_factors, pd.Series): 
+			logger.write("Using custom normalization")
+			pass
+		elif norm_factors is None: 
+			logger.write("Using normalization set during initialization")
+			norm_factors = self.norm_factors
+		elif norm_factors == 1: 
+			norm_factors = 1
+		else: 
+			assert norm_factors == "lib_size"
+			logger.write("Using library normalization (consider using edgeR normalization)")
+			norm_factors = self.library_sizes / 1e6
+
+		pos_results /= norm_factors
+		neg_results /= norm_factors
+
+		if report_strand is None: 
+			return pos_results + neg_results
+		elif report_strand == "forward": 
+			return pos_results
+		elif report_strand == "reverse": 
+			return neg_results
+		else: 
+			return pos_results, neg_results
+
+	@parse_interval_args
+	def get_pileups(self, chrom, start, end, strand=None, report_strand=None, include_introns=False, norm_factors=None, verbose=True): 
+		# load data if cached, otherwise continue
+		region = "{}:{}-{}".format(chrom, start, end)
+		if include_introns: region += "_introns"
 		if region in self._pileup_cache: 
 			logger.write("Loading {} pileups from cache".format(self.omic))
 			pileups = self._pileup_cache[region]
@@ -267,15 +283,21 @@ class BamQuery:
 			pos_results = pd.DataFrame.from_dict({guid:x["pos"] for guid,x in pileups.items()})
 			neg_results = pd.DataFrame.from_dict({guid:x["neg"] for guid,x in pileups.items()})
 
-		if isinstance(normalize, pd.Series): 
-			norm_factor = normalize
-		elif normalize == "lib_size": 
-			norm_factor = self.library_sizes / self.library_sizes.median()
+		if isinstance(norm_factors, pd.Series): 
+			logger.write("Using custom normalization")
+			pass
+		elif norm_factors is None: 
+			logger.write("Using normalization set during initialization")
+			norm_factors = self.norm_factors
+		elif norm_factors == 1: 
+			norm_factors = 1
 		else: 
-			norm_factor = 1
+			assert norm_factors == "lib_size"
+			logger.write("Using library normalization (consider using edgeR normalization)")
+			norm_factors = self.library_sizes / 1e6
 
-		pos_results /= norm_factor
-		neg_results /= norm_factor
+		pos_results /= norm_factors
+		neg_results /= norm_factors
 
 		if report_strand is None: 
 			return Coverage(pos_results + neg_results)
@@ -286,95 +308,36 @@ class BamQuery:
 		else: 
 			return Coverage(pos_results), Coverage(neg_results)
 
+	@parse_interval_args
+	def plotter(self, chrom, start, end, norm_factors=None, residualizer="self", **kwargs): 
+		"""
+		Returns object for plotting pileups.
+		"""
+		kwargs["strand"] = "+"
+		pos_pileups, neg_pileups = self.get_pileups(chrom, start, end, report_strand="both", norm_factors=norm_factors, **kwargs)
 
+		if residualizer == "self": 
+			residualizer = self.residualizer
 
-
-	# @parse_interval_args
-	# def get_coverages_old(self, chrom, start, end, strand=None, **kwargs): 
-
-	# 	strand_specific = kwargs.pop("strand_specific", True)
-	# 	normalize = kwargs.pop("normalize", "lib_size")
-	# 	verbose = kwargs.pop("verbose", True)
-	# 	# logger.write("Unused kwargs:", kwargs)
-
-	# 	coverages = {}
-	# 	for i,(guid,bam) in enumerate(self.sam_files_dic.items()): 
-	# 		logger.update("Loading bam coverage ({} of {})...".format(i, len(self.sam_files_dic)), verbose=verbose)
-	# 		coverages[guid] = self._get_coverage(bam, chrom, start, end, strand)
-	# 	logger.flush(verbose=verbose)
-
-	# 	pos_results = pd.Series({ guid:val["pos"] for guid,val in coverages.items() })
-	# 	neg_results = pd.Series({ guid:val["neg"] for guid,val in coverages.items() })
-
-	# 	if isinstance(normalize, pd.Series): 
-	# 		norm_factor = normalize
-	# 	elif normalize == "lib_size": 
-	# 		norm_factor = self.library_sizes / self.library_sizes.median()
-	# 	else: 
-	# 		norm_factor = 1
-	# 	pos_results = pos_results / norm_factor
-	# 	neg_results = neg_results / norm_factor
-
-	# 	if strand_specific: 
-	# 		return pos_results, neg_results
-	# 	else: 
-	# 		return pos_results + neg_results
-
-	# @parse_interval_args
-	# def get_pileups_old(self, chrom, start, end, strand=None, **kwargs): 
-
-	# 	strand_specific = kwargs.pop("strand_specific", False)
-	# 	include_introns = kwargs.pop("include_introns", False)
-	# 	normalize = kwargs.pop("normalize", "lib_size")
-	# 	verbose = kwargs.pop("verbose", True)
-	# 	# logger.write("Unused kwargs:", kwargs)
-
-	# 	pileups = {}
-	# 	for i,(guid,bam) in enumerate(self.sam_files_dic.items()): 
-	# 		logger.update("Loading bam pileups ({} of {})...".format(i, len(self.sam_files_dic)), verbose=verbose)
-	# 		pileups[guid] = self._get_pileup(bam, chrom, start, end, strand, include_introns=include_introns)
-	# 	logger.flush(verbose=verbose)
-
-	# 	pos_results = pd.DataFrame.from_dict({guid:x["pos"] for guid,x in pileups.items()})
-	# 	neg_results = pd.DataFrame.from_dict({guid:x["neg"] for guid,x in pileups.items()})
-
-	# 	if isinstance(normalize, pd.Series): 
-	# 		norm_factor = normalize
-	# 	elif normalize == "lib_size": 
-	# 		norm_factor = self.library_sizes / self.library_sizes.median()
-	# 	else: 
-	# 		norm_factor = 1
-	# 	pos_results = pos_results / norm_factor
-	# 	neg_results = neg_results / norm_factor
-
-	# 	if strand_specific: 
-	# 		return pos_results, neg_results
-	# 	else: 
-	# 		return pos_results + neg_results
-			
-	# 	if strand_specific: 
-	# 		return Coverage(pos_results), Coverage(neg_results)
-	# 	else: 
-	# 		return Coverage(pos_results + neg_results)
+		return TrackPlotter(pos_pileups, neg_pileups, residualizer)
 
 
 class TrackPlotter: 
 
-	def __init__(self, pos_tracks, neg_tracks, covariates_df=None): 
+	def __init__(self, pos_tracks, neg_tracks, residualizer=None): 
 
 		self.pos_tracks = Coverage(pos_tracks)
 		self.neg_tracks = Coverage(neg_tracks)
 		self.tracks = self.pos_tracks + self.neg_tracks
-		self.covariates_df = covariates_df
-		self.residualizer = Residualizer(covariates_df.T)
+		self.residualizer = residualizer
 
 		self.positions = self.tracks.index
 
 	@classmethod
-	def load(cls, genomic_data, covariates_df, interval_obj, **kwargs): 
+	def load(cls, genomic_data, residualizer, interval_obj, **kwargs): 
 		chrom, start, end = interval_obj.coords
 		pos_tracks, neg_tracks = genomic_data.get_pileups(chrom, start, end, strand="+", report_strand="both", **kwargs)
-		return cls(pos_tracks, neg_tracks, covariates_df)
+		return cls(pos_tracks, neg_tracks, residualizer)
 
 	def estimate_coverage(self, bounds, by_strand=False, residualize=True, n_bins=1): 
 
@@ -421,6 +384,10 @@ class TrackPlotter:
 
 	@staticmethod
 	def subselect(data, bounds=None, w=0, shift=0, n_bins=1000, **kwargs): 
+
+		if "interval" in kwargs: 
+			bounds = kwargs["interval"].bounds
+
 		# get plotting window
 		bounds = TrackPlotter.get_bounds(data, bounds, w, shift)
 
@@ -457,10 +424,13 @@ class TrackPlotter:
 
 		# # get subsetted data
 		# track_data = TrackPlotter.coursen(track_data, bounds=bounds, n_bins=1000)
+		if "interval" in kwargs: 
+			bounds = kwargs["interval"].bounds
 
 		# reduce data dimension
 		if subselect: 
 			track_data = TrackPlotter.subselect(track_data, bounds, w, shift)
+
 		bounds = (track_data.index.min(), track_data.index.max())
 
 		# residualize
@@ -506,24 +476,25 @@ class TrackPlotter:
 
 		if by_strand: 
 			pos_tracks = TrackPlotter.subselect(self.pos_tracks, **kwargs)
-			pos_results = QTL_pairwise(genotypes, pos_tracks, self.covariates_df)
+			pos_results = QTL_pairwise(genotypes, pos_tracks, self.residualizer.C.T)
 			pos_results = pos_results.sort_values("phenotype_id").set_index("phenotype_id")["r2"].fillna(0)
 			self._plotter(pos_results, **kwargs)
 
 			neg_tracks = TrackPlotter.subselect(self.neg_tracks, **kwargs)
-			neg_results = QTL_pairwise(genotypes, neg_tracks, self.covariates_df)
+			neg_results = QTL_pairwise(genotypes, neg_tracks, self.residualizer.C.T)
 			neg_results = neg_results.sort_values("phenotype_id").set_index("phenotype_id")["r2"].fillna(0)
 			self._plotter(neg_results, **kwargs)
 		else: 
 			tracks = TrackPlotter.subselect(self.tracks, **kwargs)
-			results = QTL_pairwise(genotypes, tracks, self.covariates_df)
+			results = QTL_pairwise(genotypes, tracks, self.residualizer.C.T)
 			results = results.sort_values("phenotype_id").set_index("phenotype_id")["r2"].fillna(0)
 			self._plotter(results, **kwargs)
+			return results
 
 	def plot_correlation_with_feature(self, feature, residualize=True, **kwargs): 
 		"""Feature-centric plot. How does the nearby area correlate with this feature?"""
 		if residualize: 
-			results = QTL_pairwise(feature, self.tracks, self.covariates_df)
+			results = QTL_pairwise(feature, self.tracks, self.residualizer.C.T)
 		else: 
 			tracks = self.residualizer.transform(self.tracks)
 			results = QTL_pairwise(feature, tracks)
@@ -537,7 +508,7 @@ class TrackPlotter:
 		results = QTL_pairwise(
 			feature_bins, 
 			tracks, 
-			self.covariates_df
+			self.residualizer.C.T
 		).rename(columns={"variant_id": "feature_bin", "phenotype_id": "position"})
 		results["r2"] *= np.sign(results["slope"])
 		results_2d = results.pivot(index="feature_bin", columns="position", values="r2")
@@ -559,211 +530,14 @@ class TrackPlotter:
 
 
 	def draw_variant_line(self, variant_id=None, ax=None, **kwargs): 
-		variants = flatten(list(variant_id))
-		positions = DATA.rsid.loc[variant_id, "pos"]
+
+		variants = np.array(variant_id).flatten()
+		positions = DATA.rsid.loc[variants, "pos"]
 		for p in positions: 
 			ax.axvline(x=p)
 
 
 
-class Interval: 
-
-	def __init__(self, chrom, start, end, strand=None, **kwargs):
-
-		assert start < end
-
-		self.chrom = chrom if chrom.startswith("chr") else "chr"+chrom
-		self.start = int(start)
-		self.end = int(end)
-		self.strand = strand
-
-	@classmethod
-	def load(cls, *args): 
-		if len(args) >= 3:
-			# assume arguments provided are chrom, start, end
-			return cls(*args) 
-
-		if len(args) == 1: 
-
-			# try inferring input type
-			s = args[0]
-			if s.startswith("ENSG"): 
-				return cls.load_ensg(s)
-			if s.startswith("rs"): 
-				return cls.load_rsid(s)
-			if s in DATA.ENSG.values: 
-				return cls.load_symbol(s)
-			if re.search(r'(.*):(\d*)-(\d*)', s).groups(): 
-				return cls.load_region(s)
-
-		logger.write(args)
-
-		raise Exception("Could not parse interval.")
-
-	@classmethod
-	def load_ensg(cls, ensg): 
-		return cls(**DATA.rna_metadata.loc[ensg])
-
-	@classmethod
-	def load_symbol(cls, symbol): 
-		ensgs = DATA.ENSG[DATA.ENSG == symbol].index.tolist()
-		if len(ensgs) == 1: 
-			return cls.load_ensg(ensgs[0])
-		elif len(ensgs) > 1: 
-			logger.write("Multiple ENSGs found for {}:".format(symbol), ensgs)
-		else: 
-			logger.write("Could not find ENSG for {}".format(symbol))
-
-	@classmethod
-	def load_rsid(cls, rsid): 
-		chrom, pos = DATA.rsid.loc[rsid].values[:2]
-		return cls(chrom, pos, pos+1)
-
-	@classmethod
-	def load_region(cls, region): 
-		return cls(*re.search(r'(.*):(\d*)-(\d*)', region).groups())
-
-	@property
-	def coords(self):
-		return self.chrom, self.start, self.end
-
-	@property
-	def bounds(self):
-		return self.start, self.end
-
-	@property
-	def tag(self):
-		return "{}:{}-{}".format(*self.coords)
-
-	@property
-	def pr(self):
-		region_dic = {"Chromosome": [self.chrom], "Start": [self.start], "End": [self.end]}
-		if self.strand: 
-			region_dic["Strand"] = [self.strand]
-		return pr.from_dict(region_dic)
-
-	def window(self, w, **kwargs): 
-		return Interval(self.chrom, int(self.start-w), int(self.end+w), strand=self.strand)
-
-	def transform(self, w=0, shift=0, **kwargs): 
-		start = int(self.start - w + shift)
-		end   = int(self.end   + w + shift)
-		return Interval(self.chrom, int(start), int(end), strand=self.strand)
-
-
-
-class GenomicInterval: 
-
-	_is_interval = True
-
-	def __init__(self, chrom, start, end, **kwargs): 
-
-		self.kwargs = kwargs
-
-		self.chrom = chrom if chrom.startswith("chr") else "chr"+chrom
-		self.start_, self.end_ = int(start), int(end)
-		assert self.start_ < self.end_
-
-		self.strand = self.kwargs.pop("strand", None)
-		self.window = self.kwargs.pop("window", 0)
-
-	@property
-	def start(self):
-		return self.start_ - self.window
-
-	@property
-	def end(self):
-		return self.end_ + self.window
-
-	# @property
-	# def window(self):
-	# 	return self._window
-	
-	# @window.setter
-	# def window(self, w): 
-	# 	self._window = w
-	
-	@classmethod
-	def load(cls, *args, **kwargs): 
-		if len(args) >= 3:
-			# assume arguments provided are chrom, start, end
-			return cls(*args, **kwargs) 
-
-		if len(args) == 1: 
-			try: 
-				if hasattr(args[0], "_is_interval"): 
-					obj = args[0]
-					if "window" in kwargs: 
-						obj.window = kwargs["window"]
-					obj.kwargs = kwargs
-					return obj
-					# if "window" in kwargs: 
-					# 	return args[0].window(kwargs["window"])
-					# else: 
-					# 	return args[0]
-			except: 
-				pass
-
-			# try inferring input type
-			s = args[0]
-			if s.startswith("ENSG"): 
-				return cls.load_ensg(s, **kwargs)
-			if s.startswith("rs"): 
-				return cls.load_rsid(s, **kwargs)
-			if s in DATA.ENSG.values: 
-				return cls.load_symbol(s, **kwargs)
-			if re.search(r'(.*):(\d*)-(\d*)', s).groups(): 
-				return cls.load_region(s, **kwargs)
-
-		logger.write(args)
-
-		raise Exception("Could not parse interval.")
-
-	@classmethod
-	def load_ensg(cls, ensg, **kwargs): 
-		return cls(**DATA.rna_metadata.loc[ensg], **kwargs)
-
-	@classmethod
-	def load_symbol(cls, symbol, **kwargs): 
-		ensgs = DATA.ENSG[DATA.ENSG == symbol].index.tolist()
-		if len(ensgs) == 1: 
-			return cls.load_ensg(ensgs[0], **kwargs)
-		elif len(ensgs) > 1: 
-			logger.write("Multiple ENSGs found for {}:".format(symbol), ensgs)
-		else: 
-			logger.write("Could not find ENSG for {}".format(symbol))
-
-	@classmethod
-	def load_rsid(cls, rsid, **kwargs): 
-		chrom, pos = DATA.rsid.loc[rsid].values[:2]
-		return cls(chrom, pos, pos+1, **kwargs)
-
-	@classmethod
-	def load_region(cls, region, **kwargs): 
-		return cls(*re.search(r'(.*):(\d*)-(\d*)', region).groups(), **kwargs)
-
-	@property
-	def interval(self):
-		return self.chrom, self.start, self.end, self.strand
-
-	@property
-	def region(self):
-		return "{}:{}-{}".format(self.chrom, self.start, self.end)
-
-	@property
-	def pr(self):
-		region_dic = {"Chromosome": [self.chrom], "Start": [self.start], "End": [self.end]}
-		if self.strand: 
-			region_dic["Strand"] = [self.strand]
-		return pr.from_dict(region_dic)
-
-	def get_bounds(self, w, shift=0, **kwargs): 
-		start = self.start_ - w + shift
-		end   = self.end_   + w + shift
-		return start, end
-
-	def get_region(self, *args, **kwargs): 
-		return "{}:{}-{}".format(self.chrom, *self.get_bounds(*args, **kwargs))
 
 
 from .omic import inverse_normal_transform
@@ -795,6 +569,14 @@ class Coverage(pd.DataFrame):
 
 
 
+class QueryVariants: 
+
+	def __init__(self, vcf_path=None, rsid=None, initialize=False): 
+
+		self.vcf_path = vcf_path
+		self.rsid = rsid
+
+		self.tbx = pysam.TabixFile(str(self.vcf_path))
 
 
 
@@ -947,3 +729,75 @@ class Genomic:
 		# if initialize: 
 		# 	self.rna_bams_pysam
 		# 	self.atac_bams_pysam
+
+
+
+
+
+	# @parse_interval_args
+	# def get_coverages_old(self, chrom, start, end, strand=None, **kwargs): 
+
+	# 	strand_specific = kwargs.pop("strand_specific", True)
+	# 	normalize = kwargs.pop("normalize", "lib_size")
+	# 	verbose = kwargs.pop("verbose", True)
+	# 	# logger.write("Unused kwargs:", kwargs)
+
+	# 	coverages = {}
+	# 	for i,(guid,bam) in enumerate(self.sam_files_dic.items()): 
+	# 		logger.update("Loading bam coverage ({} of {})...".format(i, len(self.sam_files_dic)), verbose=verbose)
+	# 		coverages[guid] = self._get_coverage(bam, chrom, start, end, strand)
+	# 	logger.flush(verbose=verbose)
+
+	# 	pos_results = pd.Series({ guid:val["pos"] for guid,val in coverages.items() })
+	# 	neg_results = pd.Series({ guid:val["neg"] for guid,val in coverages.items() })
+
+	# 	if isinstance(normalize, pd.Series): 
+	# 		norm_factors = normalize
+	# 	elif normalize == "lib_size": 
+	# 		norm_factors = self.library_sizes / self.library_sizes.median()
+	# 	else: 
+	# 		norm_factors = 1
+	# 	pos_results = pos_results / norm_factor
+	# 	neg_results = neg_results / norm_factor
+
+	# 	if strand_specific: 
+	# 		return pos_results, neg_results
+	# 	else: 
+	# 		return pos_results + neg_results
+
+	# @parse_interval_args
+	# def get_pileups_old(self, chrom, start, end, strand=None, **kwargs): 
+
+	# 	strand_specific = kwargs.pop("strand_specific", False)
+	# 	include_introns = kwargs.pop("include_introns", False)
+	# 	normalize = kwargs.pop("normalize", "lib_size")
+	# 	verbose = kwargs.pop("verbose", True)
+	# 	# logger.write("Unused kwargs:", kwargs)
+
+	# 	pileups = {}
+	# 	for i,(guid,bam) in enumerate(self.sam_files_dic.items()): 
+	# 		logger.update("Loading bam pileups ({} of {})...".format(i, len(self.sam_files_dic)), verbose=verbose)
+	# 		pileups[guid] = self._get_pileup(bam, chrom, start, end, strand, include_introns=include_introns)
+	# 	logger.flush(verbose=verbose)
+
+	# 	pos_results = pd.DataFrame.from_dict({guid:x["pos"] for guid,x in pileups.items()})
+	# 	neg_results = pd.DataFrame.from_dict({guid:x["neg"] for guid,x in pileups.items()})
+
+	# 	if isinstance(normalize, pd.Series): 
+	# 		norm_factors = normalize
+	# 	elif normalize == "lib_size": 
+	# 		norm_factors = self.library_sizes / self.library_sizes.median()
+	# 	else: 
+	# 		norm_factors = 1
+	# 	pos_results = pos_results / norm_factor
+	# 	neg_results = neg_results / norm_factor
+
+	# 	if strand_specific: 
+	# 		return pos_results, neg_results
+	# 	else: 
+	# 		return pos_results + neg_results
+			
+	# 	if strand_specific: 
+	# 		return Coverage(pos_results), Coverage(neg_results)
+	# 	else: 
+	# 		return Coverage(pos_results + neg_results)

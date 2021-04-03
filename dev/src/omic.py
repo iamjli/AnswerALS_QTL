@@ -51,7 +51,7 @@ class Omic:
 		self.counts.index  = self.regions.index
 		self.lengths.index = self.regions.index
 
-		# Normalization
+		# thresholding parameters
 		self.sample_frac_threshold = 0.2
 		self.count_threshold = 6
 		self.tpm_threshold = 0.1 
@@ -60,23 +60,22 @@ class Omic:
 		self._lib_norm_factors = None
 		self._tmm_norm_factors = None
 
+		# normalized martices
 		self._tpm = None
 		self._tmm = None
 		self._gtex = None
 
 	@classmethod
-	def load(cls, path):
+	def load(cls, path, omic):
 		path = Path(path)
 		counts_df = pd.read_csv(path, sep="\t", index_col=0, compression="gzip")
 
-		if counts_df.index.name == "gene_id": 
-			omic = "rna"
+		if omic == "rna": 
 			regions = counts_df[["chrom", "start", "end", "strand"]]
 			lengths = counts_df["lengths"]
 			counts = counts_df.iloc[:,5:]
 
-		if counts_df.index.name == "peak_id": 
-			omic = "atac"
+		if omic == "atac":
 			regions = counts_df[["chrom", "start", "end"]]
 			lengths = counts_df["lengths"]
 			counts = counts_df.iloc[:,4:]
@@ -92,11 +91,13 @@ class Omic:
 
 	@classmethod
 	def load_rna(cls, dump_path=RESULTS_PATHS["rna_omic_dump"]): 
-		return cls.load(results_paths["rna_omic_dump"])
+		logger.write("Loading saved RNA counts from: {}".format(dump_path.relative_to(BASE_DIR)))
+		return cls.load(dump_path, omic="rna")
 
 	@classmethod
 	def load_atac(cls, dump_path=RESULTS_PATHS["atac_omic_dump"]): 
-		return cls.load(dump_path)
+		logger.write("Loading saved ATAC counts from: {}".format(dump_path.relative_to(BASE_DIR)))
+		return cls.load(dump_path, omic="atac")
 
 	@property
 	def mask(self):
@@ -115,7 +116,34 @@ class Omic:
 					((self.tpm >= self.tpm_threshold).sum(axis=1) >= n_threshold)
 				)
 		return self._mask
-	
+
+	# NORMALIZATION FACTORS
+	@property
+	def tmm_norm_factors(self):
+		"""TMM normalization as implemented in edgeR."""
+		if self._tmm_norm_factors is None: 
+			logger.write("Computing TMM norm factors...")
+			_tmm_norm_factors = edgeR_calcNormFactors(self.counts)
+			self._tmm_norm_factors = pd.Series(data=_tmm_norm_factors, index=self.sample_names)
+		return self._tmm_norm_factors
+
+	@property
+	def lib_norm_factors(self):
+		"""Total number of million reads."""
+		if self._lib_norm_factors is None: 
+			if self.omic == "rna": 
+				self._lib_norm_factors = self.counts.sum(axis=0) / 1e6
+			elif self.omic == "atac": 
+				# ATAC data has already been normalized by library size. This changed on 210331. 
+				# self._lib_norm_factors = pd.Series(data=1, index=self.sample_names)  
+				self._lib_norm_factors = self.counts.sum(axis=0) / 1e6
+		return self._lib_norm_factors
+
+	@property
+	def edgeR_norm_factors(self):
+		return self.lib_norm_factors * self.tmm_norm_factors
+
+	# COUNT MATRICES
 	@property
 	def tpm(self):
 		if self._tpm is None: 
@@ -125,7 +153,7 @@ class Omic:
 	
 	@property
 	def tmm(self):
-		"""edgeR normalization: normalize by library size and TMM factors."""
+		"""edgeR normalization: normalize by library size (counts per million) and TMM factors."""
 		if self._tmm is None: 
 			norm_factors = self.lib_norm_factors * self.tmm_norm_factors
 			self._tmm = self.counts / norm_factors
@@ -136,26 +164,8 @@ class Omic:
 		if self._gtex is None: 
 			self._gtex = inverse_normal_transform(self.tmm[self.mask])
 		return self._gtex
-
-	@property
-	def tmm_norm_factors(self):
-		if self._tmm_norm_factors is None: 
-			logger.write("Computing TMM norm factors...")
-			_tmm_norm_factors = edgeR_calcNormFactors(self.counts)
-			self._tmm_norm_factors = pd.Series(data=_tmm_norm_factors, index=self.sample_names)
-		return self._tmm_norm_factors
-
-	@property
-	def lib_norm_factors(self):
-		if self._lib_norm_factors is None: 
-			if self.omic == "rna": 
-				self._lib_norm_factors = self.counts.sum(axis=0)
-			elif self.omic == "atac": 
-				# ATAC data has already been normalized by library size
-				# self._lib_norm_factors = pd.Series(data=1, index=self.sample_names)  
-				self._lib_norm_factors = self.counts.sum(axis=0)
-		return self._lib_norm_factors
-
+	
+	# I/O
 	def write_tensorqtl_phenotypes(self, output_dir): 
 
 		output_dir = Path(output_dir)

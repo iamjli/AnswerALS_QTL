@@ -10,18 +10,26 @@ from pathlib import Path
 from . import BASE_DIR, CHROMS, logger
 
 
+TENSORQTL_DIR = BASE_DIR / "tensorqtl_runs"
+
+GENOMES_TAG 	= "genomes_210331"
+PHENOTYPES_TAG 	= "phenotypes_210331"
+EQTL_TAG		= "_210331_rna_gtex_maf01_PEER10_sex_condition"
+AQTL_TAG		= "_210331_atac_gtex_maf01_PEER10_sex_condition_window_500"
 
 RESULTS_PATHS = {
-	"harmonized_metadata": 	BASE_DIR / "tensorqtl_runs/harmonized_metadata.210321.txt", 
-	"bams": 				BASE_DIR / "tensorqtl_runs/harmonized_data_paths.filtered.210331.txt",
-	"vcf": 					BASE_DIR / "tensorqtl_runs/genomes_210331/biallelic_snps.harmonized.VQSR_filtered_99.rsID.GT_only.vcf.gz",
-	"rsid": 				BASE_DIR / "tensorqtl_runs/genomes_210331/snp_list.biallelic_snps.harmonized.VQSR_filtered_99.rsID.GT_only.parquet", 
-	"rna_omic_dump": 		BASE_DIR / "tensorqtl_runs/phenotypes_210331/_omics_dump.rna_counts.txt.gz", 
-	"atac_omic_dump": 		BASE_DIR / "tensorqtl_runs/phenotypes_210331/_omics_dump.atac_counts.txt.gz", 
-	"rna_tmm_factors": 		BASE_DIR / "tensorqtl_runs/phenotypes_210331/_omics_dump.rna_tmm_norm_factors.txt.gz", 
-	"atac_tmm_factors": 	BASE_DIR / "tensorqtl_runs/phenotypes_210331/_omics_dump.atac_tmm_norm_factors.txt.gz", 
-	"rna_results_dir": 		BASE_DIR / "tensorqtl_runs/_210321_rna_gtex_maf01_PEER10_sex_condition/", 
-	"atac_results_dir": 	BASE_DIR / "tensorqtl_runs/_210321_atac_gtex_maf01_PEER10_sex_condition/", 
+	"harmonized_metadata": 	TENSORQTL_DIR / "harmonized_metadata.210321.txt", 
+	"bams": 				TENSORQTL_DIR / "harmonized_data_paths.filtered.210331.txt",
+	"vcf": 					TENSORQTL_DIR / GENOMES_TAG / "biallelic_snps.harmonized.VQSR_filtered_99.rsID.GT_only.vcf.gz",
+	"rsid": 				TENSORQTL_DIR / GENOMES_TAG / "snp_list.biallelic_snps.harmonized.VQSR_filtered_99.rsID.GT_only.parquet", 
+	"rna_omic_dump": 		TENSORQTL_DIR / PHENOTYPES_TAG /"_omics_dump.rna_counts.txt.gz", 
+	"atac_omic_dump": 		TENSORQTL_DIR / PHENOTYPES_TAG /"_omics_dump.atac_counts.txt.gz", 
+	"rna_tmm_factors": 		TENSORQTL_DIR / PHENOTYPES_TAG /"_omics_dump.rna_tmm_norm_factors.txt.gz", 
+	"atac_tmm_factors": 	TENSORQTL_DIR / PHENOTYPES_TAG /"_omics_dump.atac_tmm_norm_factors.txt.gz", 
+	"rna_covariates": 		TENSORQTL_DIR / PHENOTYPES_TAG / "rna_gtex.PEER_10.obs_sex_condition.PEER_covariates.txt",
+	"atac_covariates": 		TENSORQTL_DIR / PHENOTYPES_TAG / "atac_gtex.PEER_10.obs_sex_condition.PEER_covariates.txt",
+	"rna_results_dir": 		TENSORQTL_DIR / EQTL_TAG, 
+	"atac_results_dir": 	TENSORQTL_DIR / AQTL_TAG, 
 }
 
 
@@ -178,8 +186,10 @@ def _load_ALS_Consortium_metadata():
 def _load_rsid(): 
 	"""See README.md for how this was generated. Section `Generate variant list`."""
 	logger.write("Loading rsID file...")
-	# path = BASE_DIR / "_tensorqtl_old/genomes/snp_list_filtered.biallelic.harmonized.VQSR_filtered_99.rsID.parquet"
-	return pd.read_parquet(RESULTS_PATHS["rsid"])
+	rsid = pd.read_parquet(RESULTS_PATHS["rsid"])
+	# initialize loc - for some reason the first loc takes forever
+	rsid.loc[rsid.index[0]]
+	return rsid
 
 def _load_snp2tf(collapse=True): 
 	"""Load TF annotations for SNPs."""

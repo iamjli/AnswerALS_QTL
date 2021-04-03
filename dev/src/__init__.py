@@ -8,12 +8,11 @@ from .utils import SimpleLogger
 logger = SimpleLogger()
 
 from .repository import Repository, RESULTS_PATHS 
-DATA = Repository(BASE_DIR)
+DATA = Repository(RESULTS_PATHS)
 
 from .omic import Omic
-from .bed import Regions
-from .genomic import BamQuery, TrackPlotter, Interval
-from .qtl import QTL
+from .bed import Interval
+from .genomic import BamQuery, TrackPlotter
 
 # from .bed import pr_to_df, get_point, join_regions_by_window, phenotype_snp_distance
 # from .annotate import get_variant_annos_as_df, annotation_counts_per_region

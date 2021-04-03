@@ -21,8 +21,8 @@ try:
         has_rpy2 = True
 except:
     pass
-if not has_rpy2:
-    print("Warning: 'rfunc' cannot be imported. R and the 'rpy2' Python package are needed.")
+# if not has_rpy2:
+#     print("Warning: 'rfunc' cannot be imported. R and the 'rpy2' Python package are needed.")
 
 
 def calculate_qvalues(res_df, fdr=0.05, qvalue_lambda=None, logger=None):

@@ -9,6 +9,99 @@ import pyranges as pr
 from . import DATA, logger
 
 
+
+class Interval: 
+
+	def __init__(self, chrom, start, end, strand=None, **kwargs):
+
+		assert start < end
+
+		self.chrom = chrom if chrom.startswith("chr") else "chr"+chrom
+		self.start = int(start)
+		self.end = int(end)
+		self.strand = strand
+
+	def __repr__(self): 
+		return self.tag
+
+	@classmethod
+	def load(cls, *args): 
+		if len(args) >= 3:
+			# assume arguments provided are chrom, start, end
+			return cls(*args) 
+
+		if len(args) == 1: 
+
+			# try inferring input type
+			s = args[0]
+			if s.startswith("ENSG"): 
+				return cls.load_ensg(s)
+			if s.startswith("rs"): 
+				return cls.load_rsid(s)
+			if s in DATA.ENSG.values: 
+				return cls.load_symbol(s)
+			if re.search(r'(.*):(\d*)-(\d*)', s).groups(): 
+				return cls.load_region(s)
+
+		logger.write(args)
+
+		raise Exception("Could not parse interval.")
+
+	@classmethod
+	def load_ensg(cls, ensg): 
+		return cls(**DATA.rna_metadata.loc[ensg])
+
+	@classmethod
+	def load_symbol(cls, symbol): 
+		ensgs = DATA.ENSG[DATA.ENSG == symbol].index.tolist()
+		if len(ensgs) == 1: 
+			return cls.load_ensg(ensgs[0])
+		elif len(ensgs) > 1: 
+			logger.write("Multiple ENSGs found for {}:".format(symbol), ensgs)
+		else: 
+			logger.write("Could not find ENSG for {}".format(symbol))
+
+	@classmethod
+	def load_rsid(cls, rsid): 
+		chrom, pos = DATA.rsid.loc[rsid].values[:2]
+		return cls(chrom, pos, pos+1)
+
+	@classmethod
+	def load_region(cls, region): 
+		return cls(*re.search(r'(.*):(\d*)-(\d*)', region).groups())
+
+	@property
+	def coords(self):
+		return self.chrom, self.start, self.end
+
+	@property
+	def bounds(self):
+		return self.start, self.end
+
+	@property
+	def tag(self):
+		return "{}:{}-{}".format(*self.coords)
+
+	@property
+	def as_dict(self):
+		return { "chrom": self.chrom, "start": self.start, "end": self.end, "strand": self.strand }
+	
+	@property
+	def pr(self):
+		region_dic = {"Chromosome": [self.chrom], "Start": [self.start], "End": [self.end]}
+		if self.strand: 
+			region_dic["Strand"] = [self.strand]
+		return pr.from_dict(region_dic)
+
+	def window(self, w, **kwargs): 
+		return Interval(self.chrom, int(self.start-w), int(self.end+w), strand=self.strand)
+
+	def transform(self, w=0, shift=0, **kwargs): 
+		start = int(self.start - w + shift)
+		end   = int(self.end   + w + shift)
+		return Interval(self.chrom, int(start), int(end), strand=self.strand)
+
+
 class Regions(pd.DataFrame): 
 
 	# temporary properties

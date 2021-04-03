@@ -6,12 +6,15 @@ import numpy as np
 
 from scipy import interpolate, stats
 
-from . import DATA, RESULTS_PATH, CHROMS, logger
+from itertools import product
 
+from . import DATA, BASE_DIR, RESULTS_PATHS, CHROMS, logger
+
+# tensorqtl libraries
 import torch
 from tensorqtl.core import impute_mean, calculate_corr
 from tensorqtl.cis import calculate_association
-from itertools import product
+
 
 
 class Residualizer(object):
@@ -22,6 +25,7 @@ class Residualizer(object):
 		"""
 		C: samples x covariates
 		"""
+		self.C = C
 		if isinstance(C, pd.DataFrame): 
 			if not C.index.str.startswith("NEU").all(): 
 				logger.write("Warning: check that input is indexed by sample name")
@@ -35,17 +39,32 @@ class Residualizer(object):
 		self.Q_t, _ = torch.qr(C_t - C_t.mean(0))
 		self.dof = C_t.shape[0] - 2 - C_t.shape[1]
 
+	@classmethod
+	def load_rna(cls, covariate_path=RESULTS_PATHS["rna_covariates"]): 
+		logger.write("Loading RNA covariates from: {}".format(covariate_path.relative_to(BASE_DIR)))
+		covariates_df = pd.read_csv(covariate_path, sep="\t", index_col=0)
+		return cls(covariates_df.T)
+
+	@classmethod
+	def load_atac(cls, covariate_path=RESULTS_PATHS["atac_covariates"]): 
+		logger.write("Loading ATAC covariates from: {}".format(covariate_path.relative_to(BASE_DIR)))
+		covariates_df = pd.read_csv(covariate_path, sep="\t", index_col=0)
+		return cls(covariates_df.T)
+
 	def transform(self, M, center=True):
-		"""Residualize rows of M wrt columns of C"""
+		"""Residualize rows of M wrt columns of C. Does not necessarily need to be normalized."""
 
 		is_df = isinstance(M, pd.DataFrame)
 		M_t = torch.tensor(M.values, dtype=torch.float).to("cpu") if is_df else M
 
 		if center:
+			# center row means
 			M0_t = M_t - M_t.mean(1, keepdim=True) 
 		else:
 			M0_t = M_t
 
+		# the second term is the components of M that are explainable by Q. First projects into covariate space, then projects back
+		# Note that normally the projection back would be Q_inverse, but because it's orthonormal, that's equal to Q^T
 		M_t_transformed = M_t - torch.mm(torch.mm(M0_t, self.Q_t), self.Q_t.t())  # keep original mean
 
 		if is_df: 
@@ -203,7 +222,7 @@ def QTL_by_pairs(G, omic_df, pairs, covariates_df, report_maf=False, condition_s
 
 class QTL:
 
-	def __init__(self, results_dir, omic, fdr=0.05, initialize=False): 
+	def __init__(self, results_dir, omic, fdr=0.05, initialize=True): 
 		# NOTE 3/19/21: tss distances may be off
 		# in original run, the start position was used for TSS for genes on negative strand
 		# after this was corrected, the signs for calculated distances are flipped for those on negative strand
@@ -233,12 +252,12 @@ class QTL:
 			self.leads
 
 	@classmethod
-	def load_rna(cls, results_dir=RESULTS_PATH["rna_results_dir"], **kwargs): 
-		return cls(results_dir=rna_results_dir, omic="rna", **kwargs)
+	def load_rna(cls, results_dir=RESULTS_PATHS["rna_results_dir"], **kwargs): 
+		return cls(results_dir=results_dir, omic="rna", **kwargs)
 
 	@classmethod
-	def load_atac(cls, results_dir=RESULTS_PATH["atac_results_dir"], **kwargs): 
-		return cls(results_dir=atac_results_dir, omic="atac", **kwargs)
+	def load_atac(cls, results_dir=RESULTS_PATHS["atac_results_dir"], **kwargs): 
+		return cls(results_dir=results_dir, omic="atac", **kwargs)
 
 	@property
 	def fdr(self):
@@ -300,7 +319,7 @@ class QTL:
 		if self._leads is None: 
 			leads_file = self.results_dir / "cis_qtl.fdr_{}.txt.gz".format(str(self.fdr))
 			if leads_file.exists(): 
-				logger.write("Loading cis leads file with qvals from:", str(leads_file))
+				logger.write("Loading cis leads file with qvals from:", str(leads_file.relative_to(BASE_DIR)))
 				df = pd.read_csv(leads_file, sep="\t", index_col=0, compression="gzip")
 			else: 
 				logger.write("Generating cis leads with qvals...")
@@ -321,7 +340,7 @@ class QTL:
 		if self._sig is None: 
 			sig_file = self.results_dir / "cis_qtl_nominal_sig.fdr_{}.txt.gz".format(str(self.fdr))
 			if sig_file.exists(): 
-				logger.write("Loading sig QTLs from file from:", str(sig_file))
+				logger.write("Loading sig QTLs from file from:", str(sig_file.relative_to(BASE_DIR)))
 				sig = pd.read_csv(sig_file, sep="\t", compression="gzip")
 			else: 
 				df = self.cis.loc[ self.cis["pval_nominal"] <= self.cis[self.phenotype_id].map(self.leads["pval_nominal_threshold"]) ]
@@ -388,7 +407,6 @@ class QTL:
 
 class QTLResults(pd.DataFrame): 
 
-	_omic = None
 	_phen_idx = None
 
 	@property
