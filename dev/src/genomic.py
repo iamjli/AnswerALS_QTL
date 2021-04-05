@@ -7,6 +7,8 @@ import numpy as np
 import pyranges as pr
 import pysam
 
+from pathos.multiprocessing import ProcessingPool
+
 import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -19,6 +21,13 @@ from .utils import flatten
 
 gt_to_dosage_dict = {'0/0':0, '0/1':1, '1/1':2, './.':np.nan,
 					 '0|0':0, '0|1':1, '1|0':1, '1|1':2, '.|.':np.nan}
+
+
+
+
+
+
+
 
 
 def parse_interval_args(func): 
@@ -122,7 +131,7 @@ class BamQuery:
 		return chrom
 
 	@staticmethod
-	def _get_coverage(pysam_obj, chrom, start, end, prefiltered=False): 
+	def _get_coverage(pysam_obj, chrom, start, end, prefiltered=True): 
 
 		chrom = BamQuery._match_chrom_prefix(pysam_obj, chrom)
 
@@ -154,10 +163,12 @@ class BamQuery:
 		return {"complete_overlap": complete_overlap, "any_overlap": any_overlap}
 
 	@staticmethod
-	def _get_pileup(pysam_obj, chrom, start, end, include_introns=False, prefiltered=False, **kwargs): 
+	def _get_pileup(bam_path, chrom, start, end, include_introns=False, prefiltered=True, **kwargs): 
 		"""
 		Gets base-by-base read counts within a region from a pysam bam object.
 		"""
+		pysam_obj = pysam.AlignmentFile(bam_path, "rb", threads=3)
+
 		chrom = BamQuery._match_chrom_prefix(pysam_obj, chrom)
 
 		region_len = end - start
@@ -201,13 +212,6 @@ class BamQuery:
 		neg_counts = pd.Series(data=neg_markers.cumsum()[:-1], index=range(start,end))
 
 		return {"pos": pos_counts, "neg": neg_counts}
-
-	def get_coverages_pathos(self, chrom, start, end): 
-		coverages = {}
-		for i,(guid,bam) in enumerate(self.sam_files_dic.items()): 
-			coverages[guid] = self._get_coverage(bam, chrom, start, end, prefiltered=True)["complete_overlap"]
-		results = { guid:val["pos"]+val["neg"] for guid,val in coverages.items() }
-		return pd.Series(results)
 
 	@parse_interval_args
 	def get_coverages(self, chrom, start, end, strand=None, report_strand=None, overlap="any", norm_factors=None, verbose=True):
@@ -267,7 +271,7 @@ class BamQuery:
 			return pos_results, neg_results
 
 	@parse_interval_args
-	def get_pileups(self, chrom, start, end, strand=None, report_strand=None, include_introns=False, norm_factors=None, verbose=True): 
+	def get_pileups(self, chrom, start, end, strand=None, report_strand=None, include_introns=False, norm_factors=None, use_pathos=True, n_cpus=20, verbose=True): 
 		# load data if cached, otherwise continue
 		region = "{}:{}-{}".format(chrom, start, end)
 		if include_introns: region += "_introns"
@@ -275,11 +279,19 @@ class BamQuery:
 			logger.write("Loading {} pileups from cache".format(self.omic), verbose=verbose)
 			pileups = self._pileup_cache[region]
 		else: 
-			pileups = {}
-			for i,(guid,bam) in enumerate(self.sam_files_dic.items()): 
-				logger.update("Loading {} bam pileups ({} of {})...".format(self.omic, i, len(self.sam_files_dic)), verbose=verbose)
-				pileups[guid] = self._get_pileup(bam, chrom, start, end, include_introns=include_introns)
-			logger.flush(verbose=verbose)
+			if use_pathos: 
+				logger.write("Loading pileups using pathos", verbose=verbose)
+				args = ((path, chrom, start, end, include_introns) for path in self.bam_paths)
+				with ProcessingPool(n_cpus) as pool:
+					results = pool.map(lambda args: BamQuery._get_pileup(*args), args)
+				pileups = {guid:vals for guid,vals in zip(self.bam_paths.index, results)}
+			else: 
+				pileups = {}
+				for i,(guid,path) in enumerate(self.bam_paths.items()): 
+					logger.update("Loading {} bam pileups ({} of {})...".format(self.omic, i, len(self.bam_paths)), verbose=verbose)
+					pileups[guid] = self._get_pileup(path, chrom, start, end, include_introns=include_introns)
+				logger.flush(verbose=verbose)
+
 			self._update_pileup_cache(region, pileups)
 
 		# get results relative to strand
@@ -478,7 +490,7 @@ class TrackPlotter:
 		else: 
 			tracks = self.get_tracks(strand=strand, residualize=False, **kwargs)
 			results = QTL_pairwise(genotypes, tracks, self.covariates)
-			results = results.sort_values("phenotype_id").set_index("phenotype_id")["r2"].fillna(0)
+			results = results.sort_values("phenotype_id").set_index("phenotype_id")["r"].fillna(0)
 			self._plotter(results, coursen=False, **kwargs)
 
 

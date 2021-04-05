@@ -118,6 +118,7 @@ def QTL_pairwise(genotypes_df, phenotypes_df, covariates_df=None, report_maf=Fal
 		"tstat": tstat_t.flatten().numpy(), 
 		"slope": slope_t.flatten().numpy(),
 		"slope_se": slope_se_t.flatten().numpy(),
+		"r": r_nominal_t.flatten().numpy(),
 		"r2": r2_nominal_t.flatten().numpy()
 	})
 	results["pval_nominal"] = 2*stats.t.cdf(-np.abs(results["tstat"]), dof)
