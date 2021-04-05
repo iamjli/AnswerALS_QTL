@@ -15,7 +15,7 @@ TENSORQTL_DIR = BASE_DIR / "tensorqtl_runs"
 GENOMES_TAG 	= "genomes_210331"
 PHENOTYPES_TAG 	= "phenotypes_210331"
 EQTL_TAG		= "_210331_rna_gtex_maf01_PEER10_sex_condition"
-AQTL_TAG		= "_210331_atac_gtex_maf01_PEER10_sex_condition_window_500"
+AQTL_TAG		= "_210331_atac_gtex_maf01_PEER10_sex_condition_window_10kb"
 
 RESULTS_PATHS = {
 	"harmonized_metadata": 	TENSORQTL_DIR / "harmonized_metadata.210321.txt", 

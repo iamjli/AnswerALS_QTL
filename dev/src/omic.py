@@ -166,10 +166,11 @@ class Omic:
 		return self._gtex
 	
 	# I/O
-	def write_tensorqtl_phenotypes(self, output_dir): 
+	def write_tensorqtl_phenotypes(self, output_dir, prefix=None): 
 
 		output_dir = Path(output_dir)
-		prefix = "{}_gtex".format(self.omic)
+		if prefix is None: 
+			prefix = "{}_gtex".format(self.omic)
 
 		df = pd.concat([self.regions, self.gtex], axis=1, join="inner")
 		df = df.reset_index().rename(columns={"chrom": "#chr", self.regions.index.name:"gene_id"})

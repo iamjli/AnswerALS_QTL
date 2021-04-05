@@ -14,12 +14,12 @@ class Interval:
 
 	def __init__(self, chrom, start, end, strand=None, **kwargs):
 
-		assert start < end
-
 		self.chrom = chrom if chrom.startswith("chr") else "chr"+chrom
 		self.start = int(start)
 		self.end = int(end)
 		self.strand = strand
+
+		assert self.start < self.end
 
 	def __repr__(self): 
 		return self.tag
@@ -93,8 +93,46 @@ class Interval:
 			region_dic["Strand"] = [self.strand]
 		return pr.from_dict(region_dic)
 
+	@property
+	def mid(self):
+		start = (self.start + self.end) // 2
+		end = start + 1
+		return Interval(self.chrom, start, end, strand=self.strand)
+	
+	@property
+	def tss(self):
+		assert self.strand is not None
+		if self.strand == "+":
+			return Interval(self.chrom, self.start, self.start+1, strand=self.strand)
+		else: 
+			return Interval(self.chrom, self.end-1, self.end, strand=self.strand)
+
+	@property
+	def tes(self):
+		assert self.strand is not None
+		if self.strand == "+":
+			return Interval(self.chrom, self.end-1, self.end, strand=self.strand)
+		else: 
+			return Interval(self.chrom, self.start, self.start+1, strand=self.strand)	
+
 	def window(self, w, **kwargs): 
 		return Interval(self.chrom, int(self.start-w), int(self.end+w), strand=self.strand)
+
+	def extend_forward(self, d, **kwargs): 
+		if self.strand == "-": 
+			return Interval(self.chrom, int(self.start-d), int(self.end), strand=self.strand)
+		else: 
+			return Interval(self.chrom, int(self.start), int(self.end+d), strand=self.strand)
+
+	def extend_reverse(self, d, **kwargs): 
+		if self.strand == "-": 
+			return Interval(self.chrom, int(self.start), int(self.end+d), strand=self.strand)
+		else: 
+			return Interval(self.chrom, int(self.start-d), int(self.end), strand=self.strand)
+
+	# def center_window(self, w, **kwargs): 
+	# 	center = (self.start + self.end) // 2
+	# 	return Interval(self.chrom, int(center-w), int(center+w), strand=self.strand)
 
 	def transform(self, w=0, shift=0, **kwargs): 
 		start = int(self.start - w + shift)
@@ -153,7 +191,7 @@ class Regions(pd.DataFrame):
 
 	def stdout(self):
 		df = self.reset_index()[["chrom", "start", "end", self._phen_id]]
-		return df.to_string(index=False, header=False).lstrip().replace("\n ", "\\n").replace("  ", "\\t")	
+		return df.to_string(index=False, header=False).lstrip().replace("\n ", "\\n").replace("  ", "\\t")
 
 	@property
 	def sort(self):
@@ -233,6 +271,14 @@ class Regions(pd.DataFrame):
 	def get_coords(self, phen_id): 
 		return self.loc[phen_id]
 
+	def bed(self): 
+		df = self.reset_index()[["chrom", "start", "end", self._phen_id]].copy()
+		df["score"] = "."
+		if "strand" in self.columns: 
+			df["strand"] = self.strand
+		else: 
+			df["strand"] = "."
+		return df
 
 def get_coords_as_pr(chrom, start, end, strand=None): 
 	if strand == ".": 

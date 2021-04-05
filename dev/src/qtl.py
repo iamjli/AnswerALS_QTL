@@ -73,7 +73,7 @@ class Residualizer(object):
 			return M_t_transformed
 
 
-def QTL_pairwise(genotypes_df, phenotypes_df, covariates_df=None, report_maf=False): 
+def QTL_pairwise(genotypes_df, phenotypes_df, covariates_df=None, report_maf=False, return_r_matrix=False): 
 	"""
 	Wrapper for `tensorqtl.core.calculate_corr` and reimplementation of `tensorqtl.cis.calculate_association`.
 	Sample names must be axis 0 for each input (i.e. index for pd.Series and columns for pd.DataFrame)
@@ -106,6 +106,9 @@ def QTL_pairwise(genotypes_df, phenotypes_df, covariates_df=None, report_maf=Fal
 	slope_t = r_nominal_t * std_ratio_t.squeeze()
 	tstat_t = r_nominal_t * torch.sqrt(dof / (1 - r2_nominal_t))
 	slope_se_t = (slope_t.double() / tstat_t).float()
+
+	if return_r_matrix: 
+		return pd.DataFrame(r_nominal_t.numpy(), index=genotypes_df.index, columns=phenotypes_df.index)
 
 	# Prepare results as dataframe. 
 	genotype_ids, phenotype_ids = zip(*product(genotypes_df.index, phenotypes_df.index))
@@ -407,6 +410,7 @@ class QTL:
 
 class QTLResults(pd.DataFrame): 
 
+	_omic = None
 	_phen_idx = None
 
 	@property
