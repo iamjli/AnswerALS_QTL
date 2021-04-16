@@ -36,6 +36,7 @@ def main():
     parser.add_argument('--load_split', action='store_true', help='Load genotypes into memory separately for each chromosome.')
     parser.add_argument('--fdr', default=0.05, type=np.float64, help='FDR for cis-QTLs')
     parser.add_argument('--qvalue_lambda', default=None, type=np.float64, help='lambda parameter for pi0est in qvalue.')
+    parser.add_argument('--search', default="tss", type=str, choices=["region", "tss", "center"], help='Normally search around TSS. Set to search region.')
     parser.add_argument('--seed', default=None, type=int, help='Seed for permutations.')
     parser.add_argument('-o', '--output_dir', default='.', help='Output directory')
     args = parser.parse_args()
@@ -58,9 +59,19 @@ def main():
 
     # load inputs
     logger.write('  * reading phenotypes ({})'.format(args.phenotype_bed))
-    phenotype_df, phenotype_pos_df = read_phenotype_bed(args.phenotype_bed)
+    if args.search == "tss": 
+        logger.write('  *** using tss as window reference point')
+        phenotype_df, phenotype_pos_df = read_phenotype_bed(args.phenotype_bed)
+    elif args.search == "center": 
+        logger.write('  *** using center of region as window reference point')
+        phenotype_df, phenotype_pos_df = read_phenotype_bed(args.phenotype_bed)
+    elif args.search == "region": 
+        logger.write('  *** using full region as window reference')
+        phenotype_df, phenotype_pos_df = read_phenotype_bed_window_region(args.phenotype_bed)
+    else: 
+        assert False
 
-    tss_dict = phenotype_pos_df.T.to_dict()
+    tss_dict = phenotype_pos_df[["chr", "tss"]].T.to_dict()
     if args.covariates is not None:
         logger.write('  * reading covariates ({})'.format(args.covariates))
         covariates_df = pd.read_csv(args.covariates, sep='\t', index_col=0).T

@@ -6,11 +6,13 @@ import pandas as pd
 import numpy as np
 import pyranges as pr
 
-from . import DATA, logger
+from . import data, logger
 
 
 
+#--------------------------------------------------------------------------------------------------#
 class Interval: 
+	"""Class for performing basic operations on genomic regions."""
 
 	def __init__(self, chrom, start, end, strand=None, **kwargs):
 
@@ -21,8 +23,15 @@ class Interval:
 
 		assert self.start < self.end
 
+		self.mid_pos = (self.start + self.end) // 2
+
+
 	def __repr__(self): 
 		return self.tag
+
+	#----------------------------------------------------------------------------------------------------#
+	# Loading
+	#----------------------------------------------------------------------------------------------------#
 
 	@classmethod
 	def load(cls, *args): 
@@ -38,22 +47,21 @@ class Interval:
 				return cls.load_ensg(s)
 			if s.startswith("rs"): 
 				return cls.load_rsid(s)
-			if s in DATA.ENSG.values: 
+			if s in data.ENSG.values: 
 				return cls.load_symbol(s)
 			if re.search(r'(.*):(\d*)-(\d*)', s).groups(): 
 				return cls.load_region(s)
 
 		logger.write(args)
-
 		raise Exception("Could not parse interval.")
 
 	@classmethod
 	def load_ensg(cls, ensg): 
-		return cls(**DATA.rna_metadata.loc[ensg])
+		return cls(**data.rna_metadata.loc[ensg])
 
 	@classmethod
 	def load_symbol(cls, symbol): 
-		ensgs = DATA.ENSG[DATA.ENSG == symbol].index.tolist()
+		ensgs = data.ENSG[data.ENSG == symbol].index.tolist()
 		if len(ensgs) == 1: 
 			return cls.load_ensg(ensgs[0])
 		elif len(ensgs) > 1: 
@@ -63,12 +71,16 @@ class Interval:
 
 	@classmethod
 	def load_rsid(cls, rsid): 
-		chrom, pos = DATA.rsid.loc[rsid].values[:2]
+		chrom, pos = data.rsid.loc[rsid].values[:2]
 		return cls(chrom, pos, pos+1)
 
 	@classmethod
 	def load_region(cls, region): 
 		return cls(*re.search(r'(.*):(\d*)-(\d*)', region).groups())
+
+	#----------------------------------------------------------------------------------------------------#
+	# Reformatted outputs
+	#----------------------------------------------------------------------------------------------------#
 
 	@property
 	def coords(self):
@@ -89,13 +101,16 @@ class Interval:
 	@property
 	def pr(self):
 		region_dic = {"Chromosome": [self.chrom], "Start": [self.start], "End": [self.end]}
-		if self.strand: 
-			region_dic["Strand"] = [self.strand]
+		if self.strand: region_dic["Strand"] = [self.strand]
 		return pr.from_dict(region_dic)
 
+	#----------------------------------------------------------------------------------------------------#
+	# Various Interval operations
+	#----------------------------------------------------------------------------------------------------#
+	
 	@property
 	def mid(self):
-		start = (self.start + self.end) // 2
+		start = self.mid_pos
 		end = start + 1
 		return Interval(self.chrom, start, end, strand=self.strand)
 	
@@ -130,14 +145,11 @@ class Interval:
 		else: 
 			return Interval(self.chrom, int(self.start-d), int(self.end), strand=self.strand)
 
-	# def center_window(self, w, **kwargs): 
-	# 	center = (self.start + self.end) // 2
-	# 	return Interval(self.chrom, int(center-w), int(center+w), strand=self.strand)
 
-	def transform(self, w=0, shift=0, **kwargs): 
-		start = int(self.start - w + shift)
-		end   = int(self.end   + w + shift)
-		return Interval(self.chrom, int(start), int(end), strand=self.strand)
+#--------------------------------------------------------------------------------------------------#
+class PeakRegions(Regions):
+	pass
+
 
 
 class Regions(pd.DataFrame): 
@@ -156,13 +168,11 @@ class Regions(pd.DataFrame):
 			self._omic = "rna"
 			self._phen_id = "gene_id"
 			self._pos_cols = ["chrom", "start", "end", "strand"]
-		elif self.index.name == "peak_id": 
+		else: 
 			# Initialize as ATAC-associated 
 			self._omic = "atac"
 			self._phen_id = "peak_id"
 			self._pos_cols = ["chrom", "start", "end"]
-		else: 
-			pass
 		return Regions
 
 	@property
@@ -172,12 +182,12 @@ class Regions(pd.DataFrame):
 		elif self.index.name == "peak_id": 
 			return "atac"
 		else: 
-			pass	
+			pass
 
 	@property
 	def annotate(self):
 		if self.omic == "rna": 
-			return self.assign(symbol=self["gene_id"].map(DATA.ENSG))
+			return self.assign(symbol=self["gene_id"].map(data.ENSG))
 
 	@property
 	def pr(self):
@@ -205,14 +215,28 @@ class Regions(pd.DataFrame):
 		return self._mid_pos
 
 	@property
+	def mid(self):
+		df = self.copy()
+		df["start"] = self.mid_pos
+		df["end"] = self.mid_pos+1
+		return Regions(df)
+
+	@property
 	def tss_pos(self):
 		if self._tss_pos is None: 
 			assert "strand" in self.columns
 			tss_pos = self.start.copy()
-			tss_pos.loc[self["strand"] == "-"] = self["end"]
+			tss_pos.loc[self["strand"] == "-"] = self["end"] - 1
 			self._tss_pos = tss_pos.astype(int)
 		return self._tss_pos
 
+	@property
+	def tss(self):
+		df = self.copy()
+		df["start"] = self.tss_pos
+		df["end"] = self.tss_pos+1
+		return Regions(df)
+	
 	@property
 	def ref_pos(self): 
 		if self.omic == "rna": 
@@ -228,6 +252,15 @@ class Regions(pd.DataFrame):
 			df["end"] = self.ref_pos+1
 			self._ref = Regions(df)
 		return self._ref
+
+	def transform(self, w=0, shift=0):
+		df = self.copy()
+		df["start"] = df["start"] - w + shift
+		df["end"] = df["end"] + w + shift
+		return Regions(df)
+	
+	def get_distance_to_position(self, pos): 
+		return self.ref_pos - pos
 	
 	def get_features_in_region(self, chrom, start, end): 
 		"""Gets Regions within a specified region."""
@@ -297,7 +330,6 @@ def get_reference_position(pr_region):
 		mid = (region_s["Start"]+region_s["End"]) // 2
 		return pr.from_dict({"Chromosome": [region_s["Chromosome"]], "Start": [mid], "End": [mid+1]})
 
-
 def pr_to_df(pr_obj, pos_cols=None): 
 	"""Converts pyranges object to pandas dataframe."""
 	if pos_cols is None: pos_cols = ["chrom", "start", "end", "strand"]
@@ -313,92 +345,139 @@ def pr_to_df(pr_obj, pos_cols=None):
 	else: 
 		logger.write("Format of `PyRanges` object not recognized")
 
+#--------------------------------------------------------------------------------------------------#
+def annotate_peaks(regions_pr, annos_pr=None): 
+	if annos_pr is None:
+		annos_pr = data.gencode
 
+	annos_merged_pr = annos_pr.merge(by=["Feature", "gene_id"], strand=False) # Merges overlapping intervals by feature_col and unstrand
+	joined = regions_pr.join(annos_merged_pr, strandedness=None, report_overlap=True).as_df()
+
+	# remove ENSG version number
+	joined["gene_id"] = joined["gene_id"].str.split(".").str[0]
+
+	return joined
+
+def get_peak_annotations(regions, mode=None, annos_pr=None): 
+	"""Returns collapsed feature annotations."""
+	if annos_pr is None:
+		annos_pr = data.gencode
+
+	annotated_peaks = annotate_peaks(regions.pr, annos_pr)
+
+	annotation_counts = annotated_peaks.groupby(["peak_id", "Feature"]).size().unstack(-1).reindex(regions.index).fillna(0).astype(int)
+	annotation_counts["intergenic"] = (annotation_counts.sum(axis=1) == 0).astype(int)
 	
+	if mode == "counts_matrix": 
+		return annotation_counts
+	elif mode == "bool_matrix": 
+		return annotation_counts > 0
+	elif mode == "unique":
+		peak_features = annotation_counts > 0
+		unique_features = pd.concat([
+		    pd.Series("tss_only",   peak_features.index[peak_features["tss"]        & ~peak_features["tes"]]), 
+		    pd.Series("tes_only",   peak_features.index[peak_features["tes"]        & ~peak_features["tss"]]), 
+		    pd.Series("tss_tes",    peak_features.index[peak_features["tss"]        & peak_features["tes"]]), 
+		    pd.Series("exon",       peak_features.index[peak_features["exon"]       & ~peak_features[["tss", "tes"]].any(axis=1)]), 
+		    pd.Series("intron",     peak_features.index[peak_features["intron"]     & ~peak_features[["tss", "tes", "exon"]].any(axis=1)]), 
+		    pd.Series("intergenic", peak_features.index[peak_features["intergenic"] & ~peak_features[["tss", "tes", "exon", "intron"]].any(axis=1)])
+		])
+		return unique_features.reindex(regions.index)
 
+
+
+# def get_annotation_matrix(regions, annos_pr=None, return_bool=True): 
+# 	"""Returns feature matrix of peaks by genomic annotation."""
+# 	annotated_peaks = annotate_peaks(regions.pr, annos_pr)
+
+# 	annotation_counts = annotated_peaks.groupby(["peak_id", "Feature"]).size().unstack(-1).reindex(regions.index).fillna(0).astype(int)
+# 	annotation_counts["intergenic"] = (annotation_counts.sum(axis=1) == 0).astype(int)
+# 	annotation_counts = annotation_counts > 0
+
+# 	return annotation_counts
+
+# def get_unique_annotations(anno_matrix): 
+# 	"""Returns a series of unique peak annotation features from annotation matrix."""
+
+
+
+
+
+
+#--------------------------------------------------------------------------------------------------#
 
 ## single operations
 
-def get_point(regions, mode="tss"):  
+# def get_point(regions, mode="tss"):  
 	
-	regions = regions.copy()
+# 	regions = regions.copy()
 
-	if isinstance(regions, pd.DataFrame): 
-		if mode == "tss": 
-			assert (regions.strand != ".").all()
-			# For rows on minus strand, set start to be one before end
-			regions.loc[regions["strand"] == "-", "start"] = regions.loc[regions["strand"] == "-", "end"] - 1
-			regions["end"] = regions["start"] + 1
-		elif mode == "tes": 
-			assert (regions.strand != ".").all()
-			# For rows on minus strand, set end to be one after start
-			regions.loc[regions["strand"] == "-", "end"] = regions.loc[regions["strand"] == "-", "start"] + 1
-			regions["start"] = regions["end"] - 1
-		elif mode == "midpoint": 
-			regions["start"] = regions[["start", "end"]].mean(axis=1)
-		else: 
-			logger.write("No valid mode specified.")
-			return 
-		regions[["start", "end"]] = regions[["start", "end"]].astype(int)
-		return regions
+# 	if isinstance(regions, pd.DataFrame): 
+# 		if mode == "tss": 
+# 			assert (regions.strand != ".").all()
+# 			# For rows on minus strand, set start to be one before end
+# 			regions.loc[regions["strand"] == "-", "start"] = regions.loc[regions["strand"] == "-", "end"] - 1
+# 			regions["end"] = regions["start"] + 1
+# 		elif mode == "tes": 
+# 			assert (regions.strand != ".").all()
+# 			# For rows on minus strand, set end to be one after start
+# 			regions.loc[regions["strand"] == "-", "end"] = regions.loc[regions["strand"] == "-", "start"] + 1
+# 			regions["start"] = regions["end"] - 1
+# 		elif mode == "midpoint": 
+# 			regions["start"] = regions[["start", "end"]].mean(axis=1)
+# 		else: 
+# 			logger.write("No valid mode specified.")
+# 			return 
+# 		regions[["start", "end"]] = regions[["start", "end"]].astype(int)
+# 		return regions
 
-	else: 
-		if mode == "tss": 
-			assert (regions.Strand != ".").all()
-			assert "Strand" in regions.columns
-			regions = regions.five_end()
-		elif mode == "tes": 
-			assert (regions.Strand != ".").all()
-			regions = regions.three_end()
-		elif mode == "midpoint": 
-			regions = regions.assign("midpoint", lambda df: ((df.Start + df.End)/2).astype(int))
-		else: 
-			logger.write("No valid mode specified.")
-			return 
-		return regions
-
-
-
-
-
-
-
-
-
-
+# 	else: 
+# 		if mode == "tss": 
+# 			assert (regions.Strand != ".").all()
+# 			assert "Strand" in regions.columns
+# 			regions = regions.five_end()
+# 		elif mode == "tes": 
+# 			assert (regions.Strand != ".").all()
+# 			regions = regions.three_end()
+# 		elif mode == "midpoint": 
+# 			regions = regions.assign("midpoint", lambda df: ((df.Start + df.End)/2).astype(int))
+# 		else: 
+# 			logger.write("No valid mode specified.")
+# 			return 
+# 		return regions
 
 
 ## arithmetic
-def join_regions_by_window(pr1, pr2, window=0): 
-	"""Get pairs of regions within a specified window."""
-	def get_distance(df): 
-		"""Use 5' end if strand is specified (RNA). Otherwise use midpoint (ATAC)."""
-		if (df.Strand == "+").all():	pos1 = df.Start
-		elif (df.Strand == "-").all():	pos1 = df.End
-		else:							pos1 = (df.Start+df.End)/2
+# def join_regions_by_window(pr1, pr2, window=0): 
+# 	"""Get pairs of regions within a specified window."""
+# 	def get_distance(df): 
+# 		"""Use 5' end if strand is specified (RNA). Otherwise use midpoint (ATAC)."""
+# 		if (df.Strand == "+").all():	pos1 = df.Start
+# 		elif (df.Strand == "-").all():	pos1 = df.End
+# 		else:							pos1 = (df.Start+df.End)/2
 
-		if (df.Strand_b == "+").all():	 pos2 = df.Start_b
-		elif (df.Strand_b == "-").all(): pos2 = df.End_b
-		else:					 		 pos2 = (df.Start_b+df.End_b)/2
+# 		if (df.Strand_b == "+").all():	 pos2 = df.Start_b
+# 		elif (df.Strand_b == "-").all(): pos2 = df.End_b
+# 		else:					 		 pos2 = (df.Start_b+df.End_b)/2
 
-		return (pos2-pos1).astype(int)
+# 		return (pos2-pos1).astype(int)
 
-	out = pr1.join(pr2, slack=window, strandedness=False, how=None)
-	out = out.assign("distance", get_distance)
-	return out
+# 	out = pr1.join(pr2, slack=window, strandedness=False, how=None)
+# 	out = out.assign("distance", get_distance)
+# 	return out
 
 
-def phenotype_snp_distance(pairs, phenotype_pos_df, variant_pos_df): 
-	"""Get strand-specific distance between phenotype and variant position."""
-	phenotype_pos = pairs["phenotype_id"].map(phenotype_pos_df["start"])
-	variant_pos = pairs["variant_id"].map(variant_pos_df["pos"])
+# def phenotype_snp_distance(pairs, phenotype_pos_df, variant_pos_df): 
+# 	"""Get strand-specific distance between phenotype and variant position."""
+# 	phenotype_pos = pairs["phenotype_id"].map(phenotype_pos_df["start"])
+# 	variant_pos = pairs["variant_id"].map(variant_pos_df["pos"])
 
-	distance = variant_pos - phenotype_pos
+# 	distance = variant_pos - phenotype_pos
 
-	if "strand" in phenotype_pos_df.columns: 
-		distance.loc[pairs["phenotype_id"].map(phenotype_pos_df["strand"]) == "-"] *= -1
+# 	if "strand" in phenotype_pos_df.columns: 
+# 		distance.loc[pairs["phenotype_id"].map(phenotype_pos_df["strand"]) == "-"] *= -1
 
-	return distance
+# 	return distance
 
 
 

@@ -363,6 +363,11 @@ class InputGeneratorCis(object):
 
         self.phenotype_tss = self.phenotype_pos_df['tss'].to_dict()
         self.phenotype_chr = self.phenotype_pos_df['chr'].to_dict()
+        if "tes" in self.phenotype_pos_df.columns: 
+            self.phenotype_tes = self.phenotype_pos_df['tes'].to_dict()
+        else: 
+            self.phenotype_tes = self.phenotype_tss
+
         variant_chrs = variant_df['chrom'].unique()
         phenotype_chrs = phenotype_pos_df['chr'].unique()
         self.chrs = [i for i in phenotype_chrs if i in variant_chrs]
@@ -377,6 +382,9 @@ class InputGeneratorCis(object):
                 print(f'\r  * checking phenotypes: {k}/{self.phenotype_df.shape[0]}', end='' if k != phenotype_df.shape[0] else None)
 
             tss = self.phenotype_tss[phenotype_id]
+            tes = self.phenotype_tes[phenotype_id]
+            left_region = min(tss, tes)
+            right_region = max(tss, tes)
             chrom = self.phenotype_chr[phenotype_id]
             # r = self.chr_variant_dfs[chrom]['index'].values[
             #     (self.chr_variant_dfs[chrom]['pos'].values >= tss - self.window) &
@@ -385,8 +393,8 @@ class InputGeneratorCis(object):
             # r = [r[0],r[-1]]
 
             m = len(self.chr_variant_dfs[chrom]['pos'].values)
-            lb = np.searchsorted(self.chr_variant_dfs[chrom]['pos'].values, tss - self.window)
-            ub = np.searchsorted(self.chr_variant_dfs[chrom]['pos'].values, tss + self.window, side='right')
+            lb = np.searchsorted(self.chr_variant_dfs[chrom]['pos'].values, left_region - self.window)
+            ub = np.searchsorted(self.chr_variant_dfs[chrom]['pos'].values, right_region + self.window, side='right')
             if lb != ub:
                 r = self.chr_variant_dfs[chrom]['index'].values[[lb, ub - 1]]
             else:

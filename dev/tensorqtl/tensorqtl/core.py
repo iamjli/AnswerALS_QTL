@@ -298,11 +298,11 @@ def read_phenotype_bed(phenotype_bed):
     else:
         raise ValueError('Unsupported file type.')
     phenotype_df.rename(columns={i:i.lower().replace('#chr','chr') for i in phenotype_df.columns[:3]}, inplace=True)
-    print("---USING ACTUAL TSS and midpoints")
 
     # create position dataframe
     if "strand" not in phenotype_df.columns: 
         # Use midpoint if strand is not specified (i.e. ATAC-seq)
+        print("---USING WINDOW AROUND MIDPOINT")
         phenotype_pos_df = phenotype_df[['chr', 'start', 'end']].copy()
         phenotype_pos_df["tss"] = phenotype_pos_df[['start', 'end']].mean(axis=1).astype(int)
         phenotype_pos_df = phenotype_pos_df[["chr", "tss"]]
@@ -311,6 +311,7 @@ def read_phenotype_bed(phenotype_bed):
         phenotype_df.drop(['chr', 'start', 'end'], axis=1, inplace=True)
         return phenotype_df, phenotype_pos_df
     else: 
+        print("---USING WINDOW AROUND TSS")
         phenotype_pos_df = phenotype_df[["chr", "start", "end", "strand"]].copy()
         phenotype_pos_df.loc[phenotype_pos_df.strand == "+", "tss"] = phenotype_pos_df.loc[phenotype_pos_df.strand == "+", "start"]
         phenotype_pos_df.loc[phenotype_pos_df.strand == "-", "tss"] = phenotype_pos_df.loc[phenotype_pos_df.strand == "-", "end"]
@@ -318,3 +319,38 @@ def read_phenotype_bed(phenotype_bed):
         phenotype_pos_df["tss"] = phenotype_pos_df["tss"].astype(int)
         phenotype_df.drop(['chr', 'start', 'end', "strand"], axis=1, inplace=True)
         return phenotype_df, phenotype_pos_df
+
+def read_phenotype_bed_window_region(phenotype_bed): 
+    """Load phenotype BED file as phenotype and TSS DataFrames"""
+    if phenotype_bed.endswith('.bed.gz'):
+        phenotype_df = pd.read_csv(phenotype_bed, sep='\t', index_col=3, dtype={'#chr':str, '#Chr':str})
+    elif phenotype_bed.endswith('.parquet'):
+        phenotype_df = pd.read_parquet(phenotype_bed)
+        phenotype_df.set_index(phenotype_df.columns[3], inplace=True)
+    else:
+        raise ValueError('Unsupported file type.')
+    phenotype_df.rename(columns={i:i.lower().replace('#chr','chr') for i in phenotype_df.columns[:3]}, inplace=True)
+    print("---USING WINDOW AROUND ENTIRE REGION")
+
+    # create position dataframe
+    if "strand" not in phenotype_df.columns: 
+        # Use midpoint if strand is not specified (i.e. ATAC-seq)
+        phenotype_pos_df = phenotype_df[['chr', 'start', 'end']].copy()
+        phenotype_pos_df = phenotype_pos_df.rename(columns={"start": "tss", "end": "tes"})
+
+        # phenotype_pos_df = phenotype_df[['chr', 'end']].rename(columns={'end':'tss'})
+        phenotype_df.drop(['chr', 'start', 'end'], axis=1, inplace=True)
+        return phenotype_df, phenotype_pos_df
+    else: 
+        phenotype_pos_df = phenotype_df[["chr", "start", "end", "strand"]].copy()
+        phenotype_pos_df.loc[phenotype_pos_df.strand == "+", "tss"] = phenotype_pos_df.loc[phenotype_pos_df.strand == "+", "start"]
+        phenotype_pos_df.loc[phenotype_pos_df.strand == "+", "tes"] = phenotype_pos_df.loc[phenotype_pos_df.strand == "+", "end"]
+
+        phenotype_pos_df.loc[phenotype_pos_df.strand == "-", "tss"] = phenotype_pos_df.loc[phenotype_pos_df.strand == "-", "end"]
+        phenotype_pos_df.loc[phenotype_pos_df.strand == "-", "tes"] = phenotype_pos_df.loc[phenotype_pos_df.strand == "-", "start"]
+        phenotype_pos_df = phenotype_pos_df[["chr", "tss", "tes"]]
+        phenotype_pos_df["tss"] = phenotype_pos_df["tss"].astype(int)
+        phenotype_pos_df["tes"] = phenotype_pos_df["tes"].astype(int)
+        phenotype_df.drop(['chr', 'start', 'end', "strand"], axis=1, inplace=True)
+        return phenotype_df, phenotype_pos_df
+
