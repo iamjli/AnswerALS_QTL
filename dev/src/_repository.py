@@ -33,6 +33,8 @@ RESULTS_PATHS = {
 	"atac_results_dir": 	TENSORQTL_DIR / CAQTL_TAG, 
 }
 
+repository = 1
+
 
 class Repository:
 
