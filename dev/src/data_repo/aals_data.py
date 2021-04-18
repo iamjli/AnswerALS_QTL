@@ -10,6 +10,7 @@ from src import base_dir, logger
 _aals_data_paths = {
 	"metadata": base_dir / "tensorqtl_runs/harmonized_metadata.210409.txt", 
 	"bams": base_dir / "tensorqtl_runs/harmonized_data_paths.local.filtered.210409.txt", 
+	"aals_metadata": base_dir / "data/metadata/ALS Consortium DNA Metadata 20201015 .xlsx",
 }
 
 class AALSData: 
@@ -49,7 +50,7 @@ class AALSData:
 	@property
 	def ALSC_metadata(self):
 		if self._ALSC_metadata is None: 
-			self._ALSC_metadata = _load_bam_paths(self.paths["bams"])
+			self._ALSC_metadata = _load_ALS_Consortium_metadata(self.paths["aals_metadata"])
 		return self._ALSC_metadata
 
 

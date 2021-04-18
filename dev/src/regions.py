@@ -102,138 +102,111 @@ class Interval:
 			return self.tag
 
 
-#--------------------------------------------------------------------------------------------------#
-class Regions(pd.DataFrame): 
-	"""
-	Multiple genomic intervals stored as a dataframe.
-	"""
-	# TODO: need to be careful with copies. Implement properties that generate copies of each column.
-	@property
-	def _constructor(self):
-		self._validate_inputs()
-		return Regions
-	
-	def _validate_inputs(self): 
-		"""Check validity of constructor arguments."""
-		assert "chrom" in self.columns
-		assert "start" in self.columns
-		assert "end" in self.columns
 
-		assert (self["end"] > self["start"]).all()
 
-		if self.is_stranded: 
-			assert self["strand"].isin(["+", "-"]).all()
 
-		# TODO: check bounds are within chromosome sizes
+@pd.api.extensions.register_dataframe_accessor("bed")
+class RegionsAccessor:
 
+	def __init__(self, regions): 
+
+		self._validate(regions)
+		self._regions = regions
+
+		self._pos = None
+
+	@staticmethod
+	def _validate(regions):
+		assert "chrom" in regions.columns
+		assert "start" in regions.columns
+		assert "end" in regions.columns
+
+		if "strand" in regions: 
+			assert regions["strand"].isin(["+", "-"]).all()
+
+	#----------------------------------------------------------------------------------------------------#
+	# Regions properties
+	#----------------------------------------------------------------------------------------------------#
 	@property
 	def is_stranded(self):
-		return "strand" in self.columns
-	
+		return "strand" in self._regions.columns
+
+	@property
+	def unstrand(self):
+		return self._regions.drop(columns=["strand"], errors="ignore")
+
+	@property
+	def pos(self):
+		"""Returns a dataframe with additional position columns."""
+		if self._pos is None: 
+			positions = self._regions.copy()
+			positions["mid"] = (positions["start"] + positions["end"]) // 2
+			if self.is_stranded: 
+				positions["tss"] = np.where(positions["strand"] == "+", positions["start"], positions["end"])
+				positions["tes"] = np.where(positions["strand"] == "-", positions["start"], positions["end"]) 
+			self._pos = positions
+		return self._pos
+
+
+	#----------------------------------------------------------------------------------------------------#
+	# Operations to generate new regions
+	#----------------------------------------------------------------------------------------------------#
+	def recenter(self, feature):
+		"""Returns bed dataframe centered around a genomic feature."""
+		new_regions = self._regions.copy()
+		if feature == "start": 
+			new_regions["end"] = new_regions["start"] + 1
+		elif feature == "end": 
+			new_regions["start"] = new_regions["end"] - 1
+		elif feature == "mid": 
+			pos = self.pos["mid"]
+			new_regions["start"], new_regions["end"] = pos, pos + 1
+		elif feature == "tss": 
+			pos = self.pos["tss"] + new_regions["strand"].replace({"+":0, "-":-1})
+			new_regions["start"], new_regions["end"] = pos, pos + 1
+		elif feature == "tes": 
+			pos = self.pos["tes"] + new_regions["strand"].replace({"+":0, "-":1})
+			new_regions["start"], new_regions["end"] = pos-1, pos
+		else:
+			raise ValueError
+		return new_regions
+
+	def expand(self, w): 
+
+		new_regions = self._regions.copy()
+		new_regions["start"] -= w
+		new_regions["end"] += w
+		return new_regions
+
+	def shift(self, s): 
+
+		new_regions = self._regions.copy()
+
+		if self.is_stranded: 
+			s = self._regions["strand"].replace({"+":s, "-":-s})
+		new_regions["start"] += s
+		new_regions["end"] += s
+		return new_regions
+
+	#----------------------------------------------------------------------------------------------------#
+	# Utility methods
+	#----------------------------------------------------------------------------------------------------#
 	def sort(self): 
-		return sort_regions(self)
+		pass
+		# return sort_regions(self)
 
 	def as_bed(self, strand_fill="."): 
 		"""Convert `Regions` object to BED format."""
-		regions_bed = pd.DataFrame(self.reset_index())
-		index_name = regions_bed.columns[0]
-		if "score" not in regions_bed.columns: 
-			regions_bed["score"] = "."
-		if "strand" not in regions_bed.columns: 
-			regions_bed["strand"] = strand_fill
-		return regions_bed[["chrom", "start", "end", index_name, "score", "strand"]]
+		pass
+		# regions_bed = pd.DataFrame(self.reset_index())
+		# index_name = regions_bed.columns[0]
+		# if "score" not in regions_bed.columns: 
+		# 	regions_bed["score"] = "."
+		# if "strand" not in regions_bed.columns: 
+		# 	regions_bed["strand"] = strand_fill
+		# return regions_bed[["chrom", "start", "end", index_name, "score", "strand"]]
 
 	def to_bed(self, path):
 		# TODO
 		pass
-
-	#----------------------------------------------------------------------------------------------------#
-	# Access positions
-	#----------------------------------------------------------------------------------------------------#
-	@property
-	def mid(self):
-		return (self["start"] + self["end"]) // 2
-
-	@property
-	def tss(self):
-		assert self.is_stranded
-		return pd.Series(data=np.where(self["strand"] == "+", self["start"], self["end"]), index=self.index)
-
-	@property
-	def tss(self):
-		assert self.is_stranded
-		return pd.Series(data=np.where(self["strand"] == "-", self["start"], self["end"]), index=self.index)
-
-	@property
-	def as_start(self):
-		df = self.copy()
-		df["end"] = df["start"] + 1
-		return Regions(df)
-
-	@property
-	def as_end(self):
-		df = self.copy()
-		df["start"] = df["end"] - 1
-		return Regions(df)
-
-	@property
-	def as_mid(self):
-		df, mid = self.copy(), self.mid
-		df["start"], df["end"] = self.mid, self.mid + 1
-		return Regions(df)
-
-	@property
-	def as_tss(self):
-		assert self.is_stranded
-		df, tss = self.copy(), self.tss
-		df["start"], df["end"] = self.tss, self.tss + 1
-		return Regions(df)
-	
-	@property
-	def as_tes(self):
-		assert self.is_stranded
-		df, tes = self.copy(), self.tes
-		df["start"], df["end"] = self.tes, self.tes + 1
-		return Regions(df)
-
-	#----------------------------------------------------------------------------------------------------#
-	# Operations to generate new `Interval` instances relative to `self`
-	#----------------------------------------------------------------------------------------------------#
-	def expand(self, window): 
-		df = self.copy()
-		df["start"] -= window
-		df["end"] += window
-		return df
-
-	def shift(self, shift, wrt_strand=None): 
-
-		if self.is_stranded and shift != 0 and wrt_strand is None: 
-			raise ValueError("`wrt_strand` must be explicit if `Regions` is stranded.")
-
-		if wrt_strand:
-			assert self.is_stranded
-			shift = self["strand"].replace({"+":shift, "-":-shift})
-
-		new_regions = self.copy()
-		new_regions["start"] += shift
-		new_regions["end"] += shift
-		return Regions(new_regions)
-
-	def transform(self, window=0, shift=0, wrt_strand=None): 
-		"""Expand the region by `window`, shift the region downstream (3' direction) by `shift`. """
-		return self.expand(window=window).shift(shift=shift, wrt_strand=wrt_strand)
-
-	# def get_feature_regions(self, feature): 
-	# 	"""
-	# 	Gets 1bp length `Regions` with the start coordinate set to the feature of interest.
-	# 	"""
-	# 	feature_pos = self.get_feature_pos(feature, adjust_end=True)
-	# 	if self.is_stranded: 
-	# 		feature_regions = pd.DataFrame.from_dict({"chrom": self.chrom, "start": feature_pos, 
-	# 			"end": feature_pos+1, "strand": self.strand})
-	# 	else: 
-	# 		feature_regions = pd.DataFrame.from_dict({"chrom": self.chrom, "start": feature_pos, 
-	# 			"end": feature_pos+1})
-
-	# 	return Regions(feature_regions)
 

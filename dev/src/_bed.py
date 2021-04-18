@@ -147,11 +147,6 @@ class Interval:
 
 
 #--------------------------------------------------------------------------------------------------#
-class PeakRegions(Regions):
-	pass
-
-
-
 class Regions(pd.DataFrame): 
 
 	# temporary properties

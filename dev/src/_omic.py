@@ -6,8 +6,8 @@ import warnings
 
 from pathlib import Path
 
-from . import BASE_DIR, RESULTS_PATHS, CHROMS, logger
-from .bed import Regions
+from . import base_dir, hg38, logger
+from src import _bed
 
 
 class Omic: 
@@ -36,7 +36,7 @@ class Omic:
 			self.regions.index = self.regions["chrom"] + ":" + self.regions["start"].astype(str) + "-" + self.regions["end"].astype(str)
 			self.regions.index.name = "peak_id"
 
-		self.regions = Regions(self.regions)
+		self.regions = _bed.Regions(self.regions)
 		self.sample_names = self.counts.columns
 
 		# compute lengths for TPM
@@ -134,7 +134,7 @@ class Omic:
 				self._mask = (
 					((self.counts >= self.count_threshold).sum(axis=1) >= n_threshold) & 
 					((self.tpm >= self.tpm_threshold).sum(axis=1) >= n_threshold) & 
-					(self.regions["chrom"].isin(CHROMS))
+					(self.regions["chrom"].isin(hg38.chroms))
 				)
 			else: 
 				self._mask = (
