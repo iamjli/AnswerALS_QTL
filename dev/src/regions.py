@@ -224,9 +224,13 @@ class RegionsAccessor:
 	#----------------------------------------------------------------------------------------------------#
 	# Utility methods
 	#----------------------------------------------------------------------------------------------------#
-	def set_index_to_interval_tags(self, name="peak_id"): 
+	@property
+	def tags(self): 
+		return self._regions["chrom"] + ":" + self._regions["start"].astype(str) + "-" + self._regions["end"].astype(str)
+
+	def set_index_to_tags(self, name="peak_id"): 
 		new_regions = self._regions.copy()
-		new_regions.index = new_regions["chrom"] + ":" + new_regions["start"].astype(str) + "-" + new_regions["end"].astype(str)
+		new_regions.index = self.tags
 		new_regions.index.name = name
 		return new_regions
 

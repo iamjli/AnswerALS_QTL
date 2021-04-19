@@ -139,30 +139,30 @@ class FeatureData:
 
 
 
-class OmicsAccessor: 
-	"""Accessor for RNA/ATAC files. Probably overkill but whatever."""
+# class OmicsAccessor: 
+# 	"""Accessor for RNA/ATAC files. Probably overkill but whatever."""
 
-	def __init__(self, omic_tag, counts_prefix): 
+# 	def __init__(self, omic_tag, counts_prefix): 
 
-		self.omic_tag = omic_tag
-		self.counts_prefix = counts_prefix
+# 		self.omic_tag = omic_tag
+# 		self.counts_prefix = counts_prefix
 
-		self._depth_per_million = None
-		self._residualizer = None
+# 		self._depth_per_million = None
+# 		self._residualizer = None
 
-	@property
-	def depth_per_million(self): 
-		if self._depth_per_million is None: 
-			from src.query.bam import get_depth_per_million
-			paths = aals.bam_paths[f"{self.omic_tag}_bam"]
-			self._depth_per_million = get_depth_per_million(paths)
-		return self._depth_per_million
+# 	@property
+# 	def depth_per_million(self): 
+# 		if self._depth_per_million is None: 
+# 			from src.query.bam import get_depth_per_million
+# 			paths = aals.bam_paths[f"{self.omic_tag}_bam"]
+# 			self._depth_per_million = get_depth_per_million(paths)
+# 		return self._depth_per_million
 
-	@property
-	def residualizer(self):
-		if self._residualizer is None: 
-			self._residualizer = Residualizer.load_covariates(self.counts_prefix)
-		return self._residualizer
+# 	@property
+# 	def residualizer(self):
+# 		if self._residualizer is None: 
+# 			self._residualizer = Residualizer.load_covariates(self.counts_prefix)
+# 		return self._residualizer
 	
 	
 

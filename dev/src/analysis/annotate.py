@@ -57,7 +57,7 @@ def get_peak_annotations(regions, mode=None, annos_pr=None):
 		return annotation_counts
 	elif mode == "bool_matrix": 
 		return annotation_counts > 0
-	elif mode == "unique":
+	else mode == "unique":
 		peak_features = annotation_counts > 0
 		unique_features = pd.concat([
 		    pd.Series("tss_only",   peak_features.index[peak_features["tss"]        & ~peak_features["tes"]]), 
