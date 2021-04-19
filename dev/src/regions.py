@@ -92,6 +92,10 @@ class Interval:
 		return coords_to_tag(self.chrom, self.start, self.end)
 
 	@property
+	def tuple3(self):
+		return self.chrom, self.start, self.end
+
+	@property
 	def tuple(self):
 		return self.chrom, self.start, self.end, self.strand
 
