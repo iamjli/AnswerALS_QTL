@@ -48,6 +48,14 @@ class AALSData:
 		return self._bam_paths
 
 	@property
+	def atac_bams(self):
+		return self.bam_paths["atac_bam"]
+
+	@property
+	def rna_bams(self):
+		return self.bam_paths["rna_bam"]
+
+	@property
 	def ALSC_metadata(self):
 		if self._ALSC_metadata is None: 
 			self._ALSC_metadata = _load_ALS_Consortium_metadata(self.paths["aals_metadata"])

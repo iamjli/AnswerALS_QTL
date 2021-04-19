@@ -5,7 +5,7 @@ import numpy as np
 
 import torch
 
-from src import logger
+from src import logger, base_dir
 
 
 
@@ -31,17 +31,16 @@ class Residualizer(object):
 		self.Q_t, _ = torch.qr(C_t - C_t.mean(0))
 		self.dof = C_t.shape[0] - 2 - C_t.shape[1]
 
-	# @classmethod
-	# def load_rna(cls, covariate_path=RESULTS_PATHS["rna_covariates"]): 
-	# 	logger.write("Loading RNA covariates from: {}".format(covariate_path.relative_to(BASE_DIR)))
-	# 	covariates_df = pd.read_csv(covariate_path, sep="\t", index_col=0)
-	# 	return cls(covariates_df.T)
+	@classmethod
+	def load_covariates(cls, path=None, prefix=None): 
+		if path is None: 
+			path = base_dir / "tensorqtl_runs/_phenotypes" / f"{prefix}_gtex.PEER_10.obs_sex_condition.PEER_covariates.txt"
 
-	# @classmethod
-	# def load_atac(cls, covariate_path=RESULTS_PATHS["atac_covariates"]): 
-	# 	logger.write("Loading ATAC covariates from: {}".format(covariate_path.relative_to(BASE_DIR)))
-	# 	covariates_df = pd.read_csv(covariate_path, sep="\t", index_col=0)
-	# 	return cls(covariates_df.T)
+		logger.write("Loading covariates from: {}".format(path.relative_to(base_dir)))
+		covariates_df = pd.read_csv(path, sep="\t", index_col=0)
+		return cls(covariates_df.T)
+
+
 
 	def transform(self, M, center=True):
 		"""Residualize rows of M wrt columns of C. Does not necessarily need to be normalized."""

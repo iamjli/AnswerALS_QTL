@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
+import warnings
+warnings.simplefilter(action='ignore', category=UserWarning)
 
 import numpy as np
 import pandas as pd
+import pyranges as pr
 
-from src import logger, hg38
+from src import logger
+from src import aals, hg38
+from src.query.bam import get_pileups_in_interval, get_coverages_in_regions
 
 
 def coords_to_tag(chrom, start, end): 
@@ -84,6 +89,11 @@ class Interval:
 		"""Expand the region by `window`, shift the region downstream (3' direction) by `shift`. """
 		return self.expand(window=window).shift(shift=shift, wrt_strand=wrt_strand)
 
+	def get_pileups(self): 
+		# TODO
+		# get_pileups_in_interval
+		pass
+
 	#----------------------------------------------------------------------------------------------------#
 	# Output formats
 	#----------------------------------------------------------------------------------------------------#
@@ -108,7 +118,9 @@ class Interval:
 
 
 
-
+#----------------------------------------------------------------------------------------------------#
+# Regions Accessor
+#----------------------------------------------------------------------------------------------------#
 @pd.api.extensions.register_dataframe_accessor("bed")
 class RegionsAccessor:
 
@@ -118,6 +130,7 @@ class RegionsAccessor:
 		self._regions = regions
 
 		self._pos = None
+		self._pr = None
 
 	@staticmethod
 	def _validate(regions):
@@ -138,6 +151,10 @@ class RegionsAccessor:
 	@property
 	def unstrand(self):
 		return self._regions.drop(columns=["strand"], errors="ignore")
+
+	@property
+	def pos_columns(self):
+		return ["chrom", "start", "end", "strand"] if self.is_stranded else ["chrom", "start", "end"]
 
 	@property
 	def pos(self):
@@ -193,11 +210,34 @@ class RegionsAccessor:
 		return new_regions
 
 	#----------------------------------------------------------------------------------------------------#
+	# Make queries from other data
+	#----------------------------------------------------------------------------------------------------#
+	def get_coverages(self, omic, max_size=10): 
+		assert self.regions.shape[1] <= max_size
+		if omic == "atac":
+			return get_coverages_in_regions(aals.atac_bams, self.regions)
+		elif omic == "rna": 
+			return get_coverages_in_regions(aals.atac_bams, self.regions)
+		else: 
+			raise ValueError
+
+	#----------------------------------------------------------------------------------------------------#
 	# Utility methods
 	#----------------------------------------------------------------------------------------------------#
+	def set_index_to_interval_tags(self, name="peak_id"): 
+		new_regions = self._regions.copy()
+		new_regions.index = new_regions["chrom"] + ":" + new_regions["start"].astype(str) + "-" + new_regions["end"].astype(str)
+		new_regions.index.name = name
+		return new_regions
+
 	def sort(self): 
 		pass
 		# return sort_regions(self)
+
+	def as_pr(self): 
+		if self._pr is None: 
+			self._pr = df_to_pr(self._regions)
+		return self._pr
 
 	def as_bed(self, strand_fill="."): 
 		"""Convert `Regions` object to BED format."""
@@ -214,3 +254,14 @@ class RegionsAccessor:
 		# TODO
 		pass
 
+
+
+
+def df_to_pr(df):
+	"""Convert dataframe of regions to pyranges"""
+	pos_columns = ["chrom", "start", "end", "strand"] if "strand" in df.columns else ["chrom", "start", "end"]
+	# reorder columns to place positions first
+	df = df.reset_index()
+	df = df[pos_columns + df.columns.drop(pos_columns, errors="ignore").tolist()] 
+	df = df.rename(columns={"chrom": "Chromosome", "start": "Start", "end": "End", "strand": "Strand"})
+	return pr.PyRanges(df)

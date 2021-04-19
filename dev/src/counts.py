@@ -7,7 +7,7 @@ from pathlib import Path
 import pickle
 import warnings
 
-from src import logger, aals, hg38
+from src import base_dir, logger, aals, hg38
 from src.regions import RegionsAccessor
 
 
@@ -25,6 +25,7 @@ class CountsData:
 		self.lengths = lengths.copy()
 
 		self.sample_names = self.counts.columns
+		self.validate()
 
 		# Library norm factors 
 		self._cpm_factors = None
@@ -112,21 +113,74 @@ class CountsData:
 		self.initialize()
 		self.prefix = prefix
 		pickle_path = Path(output_dir) / f"{self.prefix}.pkl"
+		assert not pickle_path.exists()
 		with open(pickle_path, "wb") as f:
 			pickle.dump(self, f)
 
 	@classmethod
-	def load_pickle(cls, output_dir, prefix):
-
+	def load_pickle(cls, output_dir=None, prefix=None, path=None):
+		assert (output_dir is not None and prefix is not None) or path is not None
 		pickle_path = Path(output_dir) / f"{prefix}.pkl"
 		with open(pickle_path, "rb") as f: 
 			return pickle.load(f)
+
+	def dump_data(self, output_dir, prefix, overwrite=False): 
+		"""Save counts matrices into one file"""
+		
+		counts_data_path = Path(output_dir) / f"{prefix}.counts_data.txt.gz"
+		norm_factors_path = Path(output_dir) / f"{prefix}.norm_factors.txt.gz"
+
+		if not overwrite: assert not counts_data_path.is_file() and not norm_factors_path.is_file()
+
+		# First concatenate feature metadata and matrices
+		logger.write("Generating combined dataframe...")
+		combined_metadata = pd.concat({"regions": self.regions, "lengths": self.lengths}, axis=1)
+		combined_data = pd.concat({"counts": self.counts, "tpm": self.tpm, "tmm": self.tmm, "gtex": self.gtex}, axis=1)
+		combined_output = pd.concat({"metadata": combined_metadata, "data": combined_data}, axis=1)
+
+		logger.write(f"Writing combined dataframe as {counts_data_path.name}...")
+		combined_output.to_csv(counts_data_path, sep="\t", index=True, header=True, float_format="%.5f", compression="gzip")
+
+		# Combine norm factors
+		logger.write(f"Writing norm factors as {norm_factors_path.name}...")
+		norm_factors = pd.concat({"cpm": self.cpm_factors, "tmm": self.tmm_factors}, axis=1)
+		norm_factors.to_csv(norm_factors_path, sep="\t", index=True, header=True, float_format="%.5f", compression="gzip")
+
+	@classmethod
+	def load_data(cls, prefix, output_dir=None):
+		"""Load and set attributes from a previously saved instance."""
+		if output_dir is None: 
+			output_dir = base_dir / "tensorqtl_runs/_phenotypes"
+
+		counts_data_path = Path(output_dir) / f"{prefix}.counts_data.txt.gz"
+		combined_df = pd.read_csv(counts_data_path, sep="\t", index_col=0, header=[0,1,2], compression="gzip")
+
+		norm_factors_path = Path(output_dir) / f"{prefix}.norm_factors.txt.gz"
+		norm_factors = pd.read_csv(norm_factors_path, sep="\t", index_col=0, compression="gzip")
+
+		# Instantiate new object
+		counts_obj = cls(
+			counts=combined_df["data"]["counts"].dropna(), 
+			regions=combined_df["metadata"]["regions"], 
+			lengths=combined_df["metadata"]["lengths"].iloc[:,0]
+		)
+
+		# Set internal attributes 
+		counts_obj._tpm = combined_df["data"]["tpm"].dropna()
+		counts_obj._tmm = combined_df["data"]["tmm"].dropna()
+		counts_obj._gtex = combined_df["data"]["gtex"].dropna()
+		counts_obj._cpm_factors = norm_factors["cpm"]
+		counts_obj._tmm_factors = norm_factors["tmm"]
+
+		return counts_obj
+
+
 
 
 #----------------------------------------------------------------------------------------------------#
 # DataFrame wrapper for normalization
 #----------------------------------------------------------------------------------------------------#
-@pd.api.extensions.register_dataframe_accessor("norm")
+@pd.api.extensions.register_dataframe_accessor("normalize")
 class NormAccessor:
 
 	def __init__(self, counts): 

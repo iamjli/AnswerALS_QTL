@@ -12,29 +12,148 @@ from src import logger
 
 
 
+def load_example_bam(omic="rna", i=0): 
+	from src import aals
+	bam_file = aals.bam_paths[f"{omic}_bam"][i]
+	return open_bam_file(bam_file)
+
 #--------------------------------------------------------------------------------------------------#
+def get_depth_per_million(bam_files: pd.Series): 
+	results = multiprocess_wrapper(_get_library_size, ((p,) for p in bam_files.values))
+	return pd.Series(data=results, index=bam_files.index)
+
+
+def _get_library_size(bam_file): 
+	results = pysam.idxstats(bam_file)
+	return np.array([row.split("\t")[2:] for row in results.rstrip("\n").split("\n")], dtype=int).sum() / 1e6
+
+#----------------------------------------------------------------------------------------------------#
+# Coverage
+#----------------------------------------------------------------------------------------------------#
+def get_coverages_in_regions(bam_files, regions): 
+	"""Coverage across all bams in a set of regions."""
+	args = ((path, regions) for path in bam_files)
+	results = multiprocess_wrapper(_get_coverage_in_regions, args)
+	return reshape_bam_results(results, bam_files.index)
+
+
+def _get_coverage_in_regions(bam_file, regions): 
+	"""Coverage for a single bam file in a set of regions."""
+	pysam_obj = open_bam_file(bam_file)
+
+	n_regions = len(regions)
+	pos_counts = {"complete_overlap": [0] * n_regions, "partial_overlap": [0] * n_regions}
+	neg_counts = {"complete_overlap": [0] * n_regions, "partial_overlap": [0] * n_regions}
+
+	# Get regions generator with correct chrom prefix
+	regions = regions.copy()
+	if pysam_chromosome_prefix(pysam_obj) == "": 
+		regions["chrom"] = regions["chrom"].str[3:]
+	regions_iterator = ((i,row["chrom"],row["start"],row["end"]) for i,(_,row) in enumerate(regions.iterrows()))
+
+	for i, chrom, start, end in regions_iterator: 
+
+		complete_overlap = [0,0]
+		partial_overlap = [0,0]
+
+		for read in pysam_obj.fetch(chrom, start, end): 
+			if read.reference_start >= start and read.reference_end <= end: 
+				complete_overlap[read.is_reverse] += 1
+			else: 
+				partial_overlap[read.is_reverse] += 1
+
+		pos_counts["complete_overlap"][i], neg_counts["complete_overlap"][i] = complete_overlap
+		pos_counts["partial_overlap"][i], neg_counts["partial_overlap"][i] = partial_overlap
+
+	pysam_obj.close()
+
+	pos_counts_df = pd.DataFrame(pos_counts, index=regions.index)
+	neg_counts_df = pd.DataFrame(neg_counts, index=regions.index)
+
+	return pos_counts_df, neg_counts_df
+
+#----------------------------------------------------------------------------------------------------#
+# Binned coverage
+#----------------------------------------------------------------------------------------------------#
+def get_binned_coverages_in_interval(bam_files, interval, bin_size): 
+	pass
+
+
+def _get_binned_coverage_in_interval(bam_file, interval, bin_size): 
+	pass
+
+#----------------------------------------------------------------------------------------------------#
+# Pileups
+#----------------------------------------------------------------------------------------------------#
+def get_pileups_in_interval(bam_files, chrom, start, end, **read_filters): 
+	args = ((path, chrom, start, end) for path in bam_files)
+	results = multiprocess_wrapper(_get_pileup_in_interval, args)
+	return reshape_bam_results(results, bam_files.index)
+
+
+def _get_pileup_in_interval(bam_file, chrom, start, end, **read_filters): 
+	"""
+	Pileups for a single bam file in an interval.
+	 1. Count the number of times a read start or ends at each position. This is essentially the slope.
+	 2. Count base coverage by taking the cumulative sum (integrate)
+
+	# TODO: potentially faster solution using dicts commented at the end. Since most coordinates will have
+	# no start/end reads, we work with much larger arrays than required. 
+	"""
+	pysam_obj = open_bam_file(bam_file)
+	chrom = chrom if pysam_chromosome_prefix(pysam_obj) == "chr" else chrom[3:]
+
+	region_len = end - start
+	slopes_with_introns = [[0]*(region_len+1) for _ in range(2)]
+	slopes_no_introns = [[0]*(region_len+1) for _ in range(2)]
+
+	filtered_counts = 0
+
+	# Iterate through reads that overlap query region
+	for read in pysam_obj.fetch(chrom, start, end): 
+		# if read.is_duplicate | read.is_qcfail | read.is_secondary | read.is_unmapped | (not read.is_proper_pair): 
+		if read.is_unmapped or read.is_qcfail or read.is_duplicate or read.is_secondary: 
+			continue
+
+		# Count full length of read including intronic regions
+		b_start, b_end = read.reference_start, read.reference_end
+		if not (b_start >= end or b_end <= start):  # skip reads that fall out of region
+			rel_start = b_start - start if b_start >= start else 0
+			rel_end = b_end - start if b_end <= end else region_len
+
+			slopes_with_introns[read.is_reverse][rel_start] += 1
+			slopes_with_introns[read.is_reverse][rel_end] -= 1
+
+		# Count only mappable parts of the read which excludes introns
+		for b_start,b_end in read.get_blocks(): 
+			if not (b_start >= end or b_end <= start):  # skip reads that fall out of region
+				rel_start = b_start - start if b_start >= start else 0
+				rel_end = b_end - start if b_end <= end else region_len
+
+				slopes_no_introns[read.is_reverse][rel_start] += 1
+				slopes_no_introns[read.is_reverse][rel_end] -= 1
+
+	pysam_obj.close()
+
+	# Integrate
+	slopes = slopes_with_introns + slopes_no_introns
+	pileups = pd.DataFrame(np.array(slopes).cumsum(axis=1)[:,:-1].T, index=range(start,end))
+	
+	pos_pileups = pileups[[0,2]].rename(columns={0:"include_introns", 2:"exclude_introns"})
+	neg_pileups = pileups[[1,3]].rename(columns={1:"include_introns", 3:"exclude_introns"})
+
+	return pos_pileups, neg_pileups
+
+#----------------------------------------------------------------------------------------------------#
+# Helper functions
+#----------------------------------------------------------------------------------------------------#
 def open_bam_file(bam_file, threads=2): 
 	return pysam.AlignmentFile(bam_file, "rb", threads=threads)
-
-def match_chromosome_prefix(pysam_obj, chrom): 
-	"""Returns the correctly formatted chromosome ID corresponding to a bam file (i.e. `chr1` vs. `1`)."""
-	if "chr" in pysam_obj.references[0]: 
-		if "chr" not in chrom: 
-			chrom = "chr" + str(chrom)
-	else: 
-		if "chr" in chrom: 
-			chrom = chrom[3:]
-	return chrom
 
 def pysam_chromosome_prefix(pysam_obj): 
 	return "chr" if "chr" in pysam_obj.references[0] else "" 
 
-def get_regions_generator(pysam_obj, regions): 
-	if pysam_chromosome_prefix(pysam_obj) == "":
-		regions["chrom"] = regions["chrom"].str[3:]
-	return ((i,row["chrom"],row["start"],row["end"]) for i,(index,row) in enumerate(regions.iterrows()))
-
-def multiprocess(func, args, n_cpus=24): 
+def multiprocess_wrapper(func, args, n_cpus=24): 
 	"""Wrapper for pathos"""
 	with ProcessingPool(n_cpus) as pool: 
 		results = pool.map(lambda args: func(*args), args)
@@ -58,116 +177,8 @@ def reshape_bam_results(results, samples):
 	logger.write("Level 2: `GUID`")
 	return results_df
 
-#--------------------------------------------------------------------------------------------------#
-def _get_coverage_in_regions(bam_file, regions, read_overlap=None): 
-	"""Coverage for a single bam file in a set of regions."""
-	pysam_obj = open_bam_file(bam_file)
-
-	n_regions = len(regions)
-	pos_counts = {"complete_overlap": [0] * n_regions, "partial_overlap": [0] * n_regions}
-	neg_counts = {"complete_overlap": [0] * n_regions, "partial_overlap": [0] * n_regions}
-
-	for i, chrom, start, end in get_regions_generator(pysam_obj, regions): 
-
-		complete_overlap = [0,0]
-		partial_overlap = [0,0]
-
-		for read in pysam_obj.fetch(chrom, start, end): 
-			if (read.reference_start >= start) & (read.reference_end <= end): 
-				complete_overlap[read.is_reverse] += 1
-			else: 
-				partial_overlap[read.is_reverse] += 1
-
-		pos_counts["complete_overlap"][i], neg_counts["complete_overlap"][i] = complete_overlap
-		pos_counts["partial_overlap"][i], neg_counts["partial_overlap"][i] = partial_overlap
-
-	pysam_obj.close()
-
-	pos_counts_df = pd.DataFrame(pos_counts, index=regions.index)
-	neg_counts_df = pd.DataFrame(neg_counts, index=regions.index)
-
-	return pos_counts_df, neg_counts_df
 
 
-def get_coverages_in_regions(bam_files, regions, read_overlap=None): 
-	"""Coverage across all bams in a set of regions."""
-	args = ((path, regions) for path in bam_files)
-	results = multiprocess(_get_coverage_in_regions, args)
-	return reshape_bam_results(results, bam_files.index)
-
-
-#--------------------------------------------------------------------------------------------------#
-def _get_binned_coverage_in_interval(bam_file, interval, bin_size): 
-	pass
-
-
-def get_binned_coverages_in_interval(bam_files, interval, bin_size): 
-	pass
-
-
-
-#--------------------------------------------------------------------------------------------------#
-
-def _get_pileup_in_interval(bam_file, chrom, start, end, **read_filters): 
-	"""
-	Pileups for a single bam file in an interval.
-	 1. Count the number of times a read start or ends at each position. This is essentially the slope.
-	 2. Count base coverage by taking the cumulative sum (integrate)
-	"""
-	pysam_obj = open_bam_file(bam_file)
-	chrom = chrom if pysam_chromosome_prefix(pysam_obj) == "chr" else chrom[3:]
-
-	region_len = end - start
-	slopes_with_introns = [[0]*(region_len+1) for _ in range(2)]
-	slopes_no_introns = [[0]*(region_len+1) for _ in range(2)]
-
-	filtered_counts = 0
-
-	# Iterate through reads that overlap query region
-	for read in pysam_obj.fetch(chrom, start, end): 
-		# if read.is_duplicate | read.is_qcfail | read.is_secondary | read.is_unmapped | (not read.is_proper_pair): 
-		if read.is_unmapped or read.is_qcfail or read.is_duplicate or read.is_secondary: 
-			continue
-
-		# Count full length of read including intronic regions
-		b_start, b_end = read.reference_start, read.reference_end
-		if (b_start >= end) or (b_end <= start):
-			continue  # skip reads that fall out of region
-		else: 
-			rel_start = b_start - start if b_start >= start else 0
-			rel_end = b_end - start if b_end <= end else region_len
-
-			slopes_with_introns[read.is_reverse][rel_start] += 1
-			slopes_with_introns[read.is_reverse][rel_end] -= 1
-
-		# Count only mappable parts of the read which excludes introns
-		for b_start,b_end in read.get_blocks(): 
-			if (b_start >= end) or (b_end <= start):
-				continue
-			else:
-				rel_start = b_start - start if b_start >= start else 0
-				rel_end = b_end - start if b_end <= end else region_len
-
-				slopes_no_introns[read.is_reverse][rel_start] += 1
-				slopes_no_introns[read.is_reverse][rel_end] -= 1
-
-	pysam_obj.close()
-
-	# Integrate
-	slopes = slopes_with_introns + slopes_no_introns
-	pileups = pd.DataFrame(np.array(slopes).cumsum(axis=1)[:,:-1].T, index=range(start,end))
-	
-	pos_pileups = pileups[[0,2]].rename(columns={0:"include_introns", 2:"exclude_introns"})
-	neg_pileups = pileups[[1,3]].rename(columns={1:"include_introns", 3:"exclude_introns"})
-
-	return pos_pileups, neg_pileups
-
-
-def get_pileups_in_interval(bam_files, chrom, start, end, **read_filters): 
-	args = ((path, chrom, start, end) for path in bam_files)
-	results = multiprocess(_get_pileup_in_interval, args)
-	# return results
-	return reshape_bam_results(results, bam_files.index)
 
 
 # def _get_pileup_in_interval_dic(bam_file, chrom, start, end, include_introns=False, **read_filters): 

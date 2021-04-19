@@ -5,57 +5,8 @@ import pandas as pd
 
 from pathlib import Path
 
-from src import logger, hg38
-# from src.counts import CountsData
+from src import logger, base_dir, hg38
 
-
-
-def get_counts_in_tensorqtl_fomat(phenotype_pos, phenotype_df): 
-	"""Writes counts matrix in tensorqtl format."""
-
-	assert phenotype_pos.index.equals(phenotype_df.index)
-
-	# tensorqtl requires essentially a bed file prepended to the counts data
-	tensorqtl_df = pd.concat([phenotype_pos, phenotype_df], axis=1)	
-	tensorqtl_df["gene_id"] = phenotype_pos.index
-
-	# reorder columns
-	if "strand" in tensorqtl_df.columns: 
-		metadata_cols = ["chrom", "start", "end", "gene_id", "strand"]
-	else: 
-		metadata_cols = ["chrom", "start", "end", "gene_id"]
-	cols = metadata_cols + tensorqtl_df.columns.drop(metadata_cols).tolist()
-	tensorqtl_df = tensorqtl_df[cols]
-
-	# strip `chr`
-	tensorqtl_df["chrom"] = tensorqtl_df["chrom"].str[3:]
-	tensorqtl_df = tensorqtl_df.rename(columns={"chrom": "#chr"})
-
-	return tensorqtl_df
-
-def write_phenotype_files(counts_data_obj, output_dir, prefix): 
-
-	regions, gtex = pd.DataFrame(counts_data_obj.regions).copy(), counts_data_obj.gtex.copy()
-	regions = regions.reindex(gtex.index)
-
-	# phenotype file for tensorqtl
-	logger.write("Writing phenotype file for tensorqtl")
-	tensorqtl_phenotype_path = Path(output_dir) / f"{prefix}_gtex.bed.gz"
-	tensorqtl_phenotype_df = get_counts_in_tensorqtl_fomat(regions, gtex)
-	return tensorqtl_phenotype_df
-	tensorqtl_phenotype_df.to_csv(tensorqtl_phenotype_path, sep="\t", index=False, compression="gzip")
-
-	# PEER does not accept strand column, so write the same file without it
-	logger.write("Writing phenotype file for PEER")
-	PEER_phenotype_path = Path(output_dir) / f"{prefix}_gtex.for_PEER.bed.gz"
-	PEER_phenotype_df = tensorqtl_phenotype_df.drop(columns=["strand"], errors="ignore")
-	PEER_phenotype_df.to_csv(PEER_phenotype_path, sep="\t", index=False, compression="gzip")
-
-def PEER_cmd(PEER_exec_path, phenotype_file, covariates_file, prefix, num_peer, output_dir): 
-	cmd = (
-		"time Rscript {PEER_exec_path} {phenotype_file} {prefix} {num_peer} -o --covariates {covariates_file}"
-	)
-	return cmd
 
 
 
@@ -97,9 +48,9 @@ def parse_tensorqtl_config_file(config_file):
 
 	return tensorqtl_paths, params
 
-def flexible_symlink(source_path, target_path): 
-	if not target_path.is_symlink(): 
-		target_path.symlink_to(source_path)
+# def flexible_symlink(source_path, target_path): 
+# 	if not target_path.is_symlink(): 
+# 		target_path.symlink_to(source_path)
 
 
 
@@ -174,27 +125,6 @@ class TensorQTLManager:
 		}
 		return _tensorqtl_cmd(mode, **input_paths, **self.params)
 
-
-	def save_config(self, overwrite=False):
-		if self.config_file.is_file() and not overwrite:
-			logger.write("Config file already exists")
-		else: 
-			with open(self.config_file, "w") as f: 
-				f.write(f"results_dir\t{self.results_dir}\n")
-				f.write(f"plink_prefix\t{self.plink_prefix}\n")
-				f.write(f"phenotype_path\t{self.phenotype_path}\n")
-				f.write(f"covariates_path\t{self.covariates_path}\n")
-				for key,val in self.params.items(): 
-					f.write(f"{key}\t{val}\n")
-			logger.write("Config file saved to:", self.config_file)
-
-	@classmethod
-	def load_config(cls, config_file): 
-		"""Load from config"""
-		tensorqtl_paths, params = parse_tensorqtl_config_file(config_file)
-		return cls(**tensorqtl_paths, params=params)
-
-
 	def to_run(self, mode=None): 
 		"""Displays all commands left to run."""
 		if mode == "cis": 
@@ -209,8 +139,6 @@ class TensorQTLManager:
 			self.to_run(mode="cis")
 			self.to_run(mode="cis_nominal")
 
-
-
 	#----------------------------------------------------------------------------------------------------#
 	# Post-process cis batch results
 	#----------------------------------------------------------------------------------------------------#
@@ -221,7 +149,7 @@ class TensorQTLManager:
 		"""Results path to top QTL for each phenotype.""" 
 		return self.results_dir / "cis_qtl.fdr_{}.txt.gz".format(str(fdr))
 
-	def _load_tensorqtl_cis_output(path): 
+	def _load_tensorqtl_cis_output(self, path): 
 		return pd.read_csv(path, sep="\t", index_col=0, compression="gzip")
 
 	def process_cis_results(self, fdr): 
@@ -254,7 +182,7 @@ class TensorQTLManager:
 		"""Results path to all sig QTLs using thresholds determined in leads file."""
 		return self.results_dir / "cis_qtl_nominal_sig.fdr_{}.txt.gz".format(str(fdr))
 
-	def _load_tensorqtl_cis_nominal_output(path, columns=None):
+	def _load_tensorqtl_cis_nominal_output(self, path, columns=None):
 		if columns is None: columns = ["phenotype_id", "variant_id", "tss_distance", "pval_nominal", "slope"]
 		return pd.read_parquet(path, columns=columns)
 
@@ -268,15 +196,15 @@ class TensorQTLManager:
 			return 
 
 		# 1. Import cis nominal thresholds
-		thresholds = self.load_cis_results()["pval_nominal_threshold"]
+		thresholds = self.load_cis_results(fdr)["pval_nominal_threshold"]
 
 		# 2. Load each cis nominal file and apply threshold filter
 		cis_nominal_results = []
 		for chrom in self.chroms: 
 			logger.update(f"Reading cis nominal results for {chrom}...")
 			path = self.cis_nominal_output_path(chrom)
-			results_df = self._load_tensorqtl_cis_nominal_output(path, chrom)
-			results_df = results_df.loc[results_df["pval_nominal"] <= results_df.map(thresholds)]
+			results_df = self._load_tensorqtl_cis_nominal_output(path)
+			results_df = results_df.loc[results_df["pval_nominal"] <= results_df["phenotype_id"].map(thresholds)]
 			cis_nominal_results.append(results_df)
 		cis_nominal_results = pd.concat(cis_nominal_results, ignore_index=True)
 
@@ -290,6 +218,31 @@ class TensorQTLManager:
 		we can reduce loading time by loading them as a pickle. 
 		"""
 		pass
+
+	#----------------------------------------------------------------------------------------------------#
+	# Save/load session
+	#----------------------------------------------------------------------------------------------------#
+	def save_config(self, overwrite=False):
+		if self.config_file.is_file() and not overwrite:
+			logger.write("Config file already exists")
+		else: 
+			with open(self.config_file, "w") as f: 
+				f.write(f"results_dir\t{self.results_dir}\n")
+				f.write(f"plink_prefix\t{self.plink_prefix}\n")
+				f.write(f"phenotype_path\t{self.phenotype_path}\n")
+				f.write(f"covariates_path\t{self.covariates_path}\n")
+				for key,val in self.params.items(): 
+					f.write(f"{key}\t{val}\n")
+			logger.write("Config file saved to:", self.config_file)
+
+	@classmethod
+	def load_config(cls, config_file=None, dirname=None): 
+		"""Load from config"""
+		if config_file is None: 
+			config_file = base_dir / "tensorqtl_runs" / dirname / "config.txt"
+
+		tensorqtl_paths, params = parse_tensorqtl_config_file(config_file)
+		return cls(**tensorqtl_paths, params=params)
 
 	#----------------------------------------------------------------------------------------------------#
 	# Load fully processed results
@@ -311,10 +264,6 @@ class TensorQTLManager:
 			results_df = self._load_tensorqtl_cis_nominal_output(path, chrom)
 			cis_nominal_results.append(results_df)
 		return pd.concat(cis_nominal_results, ignore_index=True)
-
-
-
-
 
 
 

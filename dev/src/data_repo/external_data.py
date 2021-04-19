@@ -81,11 +81,14 @@ class ExternalData:
 	@property
 	def gencode(self):
 		if self._gencode is None: 
-			self._gencode = _load_gencode_annos(self.paths["project_mine_hg38"])
+			self._gencode = _load_gencode_annos(self.paths["gencode_gtf"])
 		return self._gencode
 
 
 data = ExternalData()
+
+
+
 
 
 #----------------------------------------------------------------------------------------------------#
@@ -143,6 +146,7 @@ def _load_psychencode(path):
 
 def _load_psychencode_enhancers(path): 
 	logger.write("Loading psychENCODE enhancers...")
+	import pyranges as pr
 	return pr.read_bed(str(path))
 
 def _load_project_mine(path): 
@@ -151,6 +155,7 @@ def _load_project_mine(path):
 
 def _load_gencode_annos(path): 
 	logger.write("Loading Gencode annotations...")
+	import pyranges as pr
 	gencode_annos = pr.read_gtf(path)
 	gencode_annos = pr.PyRanges(pd.concat([
 		gencode_annos.features.tss().slack(1000).as_df().assign(Feature="tss"),
