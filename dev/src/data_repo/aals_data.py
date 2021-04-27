@@ -8,23 +8,28 @@ from src import base_dir, logger
 
 
 _aals_data_paths = {
-	"metadata": base_dir / "tensorqtl_runs/harmonized_metadata.210409.txt", 
-	"bams": base_dir / "tensorqtl_runs/harmonized_data_paths.local.filtered.210409.txt", 
+	"metadata": base_dir / "tensorqtl_runs/harmonized_metadata.210418.txt", 
+	"bams": base_dir / "tensorqtl_runs/harmonized_data_paths.local.210418.txt", 
+	"vcf": base_dir / "tensorqtl_runs/genomes_210409/biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.vcf.gz", 
 	"aals_metadata": base_dir / "data/metadata/ALS Consortium DNA Metadata 20201015 .xlsx",
+	"gene_coords": base_dir / "tensorqtl_runs/phenotypes_210422/rna.metadata.txt.gz",
 }
 
 class AALSData: 
 	"""Data associated with our samples such as sample paths and metadata."""
 
-	def __init__(self): 
+	def __init__(self, paths): 
 
-		self.paths = _aals_data_paths
+		self.paths = paths
 
 		self._metadata = None
 		self._bam_paths = None
 		self._ALSC_metadata = None
 
 		self._sample_names = None
+
+		self._peak_TF_clusters = None
+		self._gene_coords = None
 
 		assert (self.sample_names == self.bam_paths.index).all()
 
@@ -61,6 +66,16 @@ class AALSData:
 			self._ALSC_metadata = _load_ALS_Consortium_metadata(self.paths["aals_metadata"])
 		return self._ALSC_metadata
 
+	@property
+	def gene_coords(self):
+		if self._gene_coords is None: 
+			self._gene_coords = _load_gene_coords(self.path["gene_coords"])
+		return self._gene_coords
+	
+
+	
+
+
 
 #----------------------------------------------------------------------------------------------------#
 # Load data 
@@ -77,5 +92,9 @@ def _load_ALS_Consortium_metadata(path):
 	"""Loads ALS Consortium metadata."""
 	return pd.read_excel(path, sheet_name=0, engine="openpyxl")
 
-
-aals = AALSData()
+def _load_gene_coords(path): 
+	"""Loads ENSG coords processed by `CountsData`."""
+	df = pd.read_csv(path, sep="\t", index_col=0, headers=[0,1])
+	return df["regions"]
+#----------------------------------------------------------------------------------------------------#
+aals = AALSData(_aals_data_paths)

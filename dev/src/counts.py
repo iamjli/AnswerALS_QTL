@@ -8,7 +8,7 @@ import pickle
 import warnings
 
 from src import base_dir, logger, aals, hg38
-from src.regions import RegionsAccessor
+from src.regions import Regions
 
 
 
@@ -21,7 +21,7 @@ class CountsData:
 	def __init__(self, counts, regions, lengths, sample_frac_threshold=0.2, count_threshold=6, tpm_threshold=0.1): 
 		
 		self.counts = counts.copy()
-		self.regions = regions.copy()
+		self.regions = Regions(regions.copy())
 		self.lengths = lengths.copy()
 
 		self.sample_names = self.counts.columns
@@ -108,74 +108,106 @@ class CountsData:
 	#----------------------------------------------------------------------------------------------------#
 	# Save/load
 	#----------------------------------------------------------------------------------------------------#
-	def to_pickle(self, output_dir, prefix): 
+	def save_data(self, prefix, output_dir, overwrite=False): 
+		# regions, lengths
+		# tmm_factors
+		# counts, tpm, tmm, gtex
+		metadata_path = Path(output_dir) / f"{prefix}.metadata.txt.gz"
+		tmm_factors_path = Path(output_dir) / f"{prefix}.tmm_factors.txt.gz"
+		counts_path = Path(output_dir) / f"{prefix}.counts.txt.gz"
+		tpm_path = Path(output_dir) / f"{prefix}.tpm.txt.gz"
+		tmm_path = Path(output_dir) / f"{prefix}.tmm.txt.gz"
+		gtex_path = Path(output_dir) / f"{prefix}.gtex.txt.gz"
 
-		self.initialize()
-		self.prefix = prefix
-		pickle_path = Path(output_dir) / f"{self.prefix}.pkl"
-		assert not pickle_path.exists()
-		with open(pickle_path, "wb") as f:
-			pickle.dump(self, f)
+		if not overwrite: 
+			assert not metadata_path.is_file() and not tmm_factors_path.is_file() and not counts_path.is_file()\
+				and not tpm_path.is_file() and not tmm_path.is_file() and not gtex_path.is_file()
 
-	@classmethod
-	def load_pickle(cls, output_dir=None, prefix=None, path=None):
-		assert (output_dir is not None and prefix is not None) or path is not None
-		pickle_path = Path(output_dir) / f"{prefix}.pkl"
-		with open(pickle_path, "rb") as f: 
-			return pickle.load(f)
+		combined_metadata = pd.concat({"regions": self.regions.df, "lengths": self.lengths}, axis=1)
+		combined_metadata.to_csv(metadata_path, sep="\t", index=True, header=True, compression="gzip")
 
-	def dump_data(self, output_dir, prefix, overwrite=False): 
-		"""Save counts matrices into one file"""
+		self.tmm_factors.to_csv(tmm_factors_path, sep="\t", index=True, header=True, compression="gzip")
+		self.counts.to_csv(counts_path, sep="\t", index=True, header=True, compression="gzip")
+		self.tpm.to_csv(tpm_path, sep="\t", index=True, header=True, float_format="%.6f", compression="gzip")
+		self.tmm.to_csv(tmm_path, sep="\t", index=True, header=True, float_format="%.6f", compression="gzip")
+		self.gtex.to_csv(gtex_path, sep="\t", index=True, header=True, float_format="%.6f", compression="gzip")
+
+	def set_norm_factor(self, prefix, output_dir=None): 
+
+		tmm_factors_path = Path(output_dir) / f"{prefix}.tmm_factors.txt.gz"
+		self._tmm_factors = pd.read_csv(tmm_factors_path, sep="\t", index_col=0)["tmm"]
+
+
+	# def dump_data(self, output_dir, prefix, overwrite=False, gzip=True): 
+	# 	"""Save counts matrices into one file"""
 		
-		counts_data_path = Path(output_dir) / f"{prefix}.counts_data.txt.gz"
-		norm_factors_path = Path(output_dir) / f"{prefix}.norm_factors.txt.gz"
+	# 	if gzip:
+	# 		counts_data_path = Path(output_dir) / f"{prefix}.counts_data.txt.gz"
+	# 		norm_factors_path = Path(output_dir) / f"{prefix}.norm_factors.txt.gz"
+	# 	else: 
+	# 		counts_data_path = Path(output_dir) / f"{prefix}.counts_data.txt"
+	# 		norm_factors_path = Path(output_dir) / f"{prefix}.norm_factors.txt"
 
-		if not overwrite: assert not counts_data_path.is_file() and not norm_factors_path.is_file()
+	# 	if not overwrite: assert not counts_data_path.is_file() and not norm_factors_path.is_file()
 
-		# First concatenate feature metadata and matrices
-		logger.write("Generating combined dataframe...")
-		combined_metadata = pd.concat({"regions": self.regions, "lengths": self.lengths}, axis=1)
-		combined_data = pd.concat({"counts": self.counts, "tpm": self.tpm, "tmm": self.tmm, "gtex": self.gtex}, axis=1)
-		combined_output = pd.concat({"metadata": combined_metadata, "data": combined_data}, axis=1)
+	# 	# First concatenate feature metadata and matrices
+	# 	logger.write("Generating combined dataframe...")
+	# 	combined_metadata = pd.concat({"regions": self.regions.df, "lengths": self.lengths}, axis=1)
+	# 	combined_data = pd.concat({"counts": self.counts, "tpm": self.tpm, "tmm": self.tmm, "gtex": self.gtex}, axis=1)
+	# 	combined_output = pd.concat({"metadata": combined_metadata, "data": combined_data}, axis=1)
 
-		logger.write(f"Writing combined dataframe as {counts_data_path.name}...")
-		combined_output.to_csv(counts_data_path, sep="\t", index=True, header=True, float_format="%.5f", compression="gzip")
+	# 	logger.write(f"Writing combined dataframe as {counts_data_path.name}...")
+	# 	combined_output.to_csv(counts_data_path, sep="\t", index=True, header=True, float_format="%.5f")
 
-		# Combine norm factors
-		logger.write(f"Writing norm factors as {norm_factors_path.name}...")
-		norm_factors = pd.concat({"cpm": self.cpm_factors, "tmm": self.tmm_factors}, axis=1)
-		norm_factors.to_csv(norm_factors_path, sep="\t", index=True, header=True, float_format="%.5f", compression="gzip")
+	# 	# Combine norm factors
+	# 	logger.write(f"Writing norm factors as {norm_factors_path.name}...")
+	# 	norm_factors = pd.concat({"cpm": self.cpm_factors, "tmm": self.tmm_factors}, axis=1)
+	# 	norm_factors.to_csv(norm_factors_path, sep="\t", index=True, header=True, float_format="%.5f")
 
-	@classmethod
-	def load_data(cls, prefix, output_dir=None):
-		"""Load and set attributes from a previously saved instance."""
-		if output_dir is None: 
-			output_dir = base_dir / "tensorqtl_runs/_phenotypes"
+	# @classmethod
+	# def load_data(cls, prefix, output_dir=None, gzip=True):
+	# 	"""Load and set attributes from a previously saved instance."""
+	# 	if output_dir is None: 
+	# 		output_dir = base_dir / "tensorqtl_runs/_phenotypes"
 
-		counts_data_path = Path(output_dir) / f"{prefix}.counts_data.txt.gz"
-		combined_df = pd.read_csv(counts_data_path, sep="\t", index_col=0, header=[0,1,2], compression="gzip")
+	# 	counts_data_path = Path(output_dir) / f"{prefix}.counts_data.txt.gz"
+	# 	combined_df = pd.read_csv(counts_data_path, sep="\t", index_col=0, header=[0,1,2])
 
-		norm_factors_path = Path(output_dir) / f"{prefix}.norm_factors.txt.gz"
-		norm_factors = pd.read_csv(norm_factors_path, sep="\t", index_col=0, compression="gzip")
+	# 	norm_factors_path = Path(output_dir) / f"{prefix}.norm_factors.txt.gz"
+	# 	norm_factors = pd.read_csv(norm_factors_path, sep="\t", index_col=0)
 
-		# Instantiate new object
-		counts_obj = cls(
-			counts=combined_df["data"]["counts"].dropna(), 
-			regions=combined_df["metadata"]["regions"], 
-			lengths=combined_df["metadata"]["lengths"].iloc[:,0]
-		)
+	# 	# Instantiate new object
+	# 	counts_obj = cls(
+	# 		counts=combined_df["data"]["counts"].dropna(), 
+	# 		regions=combined_df["metadata"]["regions"], 
+	# 		lengths=combined_df["metadata"]["lengths"].iloc[:,0]
+	# 	)
 
-		# Set internal attributes 
-		counts_obj._tpm = combined_df["data"]["tpm"].dropna()
-		counts_obj._tmm = combined_df["data"]["tmm"].dropna()
-		counts_obj._gtex = combined_df["data"]["gtex"].dropna()
-		counts_obj._cpm_factors = norm_factors["cpm"]
-		counts_obj._tmm_factors = norm_factors["tmm"]
+	# 	# Set internal attributes 
+	# 	counts_obj._tpm = combined_df["data"]["tpm"].dropna()
+	# 	counts_obj._tmm = combined_df["data"]["tmm"].dropna()
+	# 	counts_obj._gtex = combined_df["data"]["gtex"].dropna()
+	# 	counts_obj._cpm_factors = norm_factors["cpm"]
+	# 	counts_obj._tmm_factors = norm_factors["tmm"]
 
-		return counts_obj
+	# 	return counts_obj
 
 
+	# def to_pickle(self, output_dir, prefix): 
 
+	# 	self.initialize()
+	# 	self.prefix = prefix
+	# 	pickle_path = Path(output_dir) / f"{self.prefix}.pkl"
+	# 	assert not pickle_path.exists()
+	# 	with open(pickle_path, "wb") as f:
+	# 		pickle.dump(self, f)
+
+	# @classmethod
+	# def load_pickle(cls, output_dir=None, prefix=None, path=None):
+	# 	assert (output_dir is not None and prefix is not None) or path is not None
+	# 	pickle_path = Path(output_dir) / f"{prefix}.pkl"
+	# 	with open(pickle_path, "rb") as f: 
+	# 		return pickle.load(f)
 
 #----------------------------------------------------------------------------------------------------#
 # DataFrame wrapper for normalization

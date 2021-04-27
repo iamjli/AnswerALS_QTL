@@ -9,7 +9,8 @@ from src import base_dir, logger
 
 
 _external_data_paths = {
-	"rsid": base_dir / "tensorqtl_runs/genomes_210409/snp_list.biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.pkl",
+	# "rsid": base_dir / "tensorqtl_runs/genomes_210409/snp_list.biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.pkl",
+	"rsid": base_dir / "tensorqtl_runs/genomes_210409/snp_positions.biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.pickle",
 	"ensg": base_dir / "data/external/ENSG_to_symbol.tsv", 
 	"snp2tf": base_dir / "data/external/SNP2TF/snp2tfbs_JASPAR_CORE_2014_vert.bed.gz",
 	"open_targets": base_dir / "data/external/targets_associated_with_amyotrophic_lateral_sclerosis.csv", 
@@ -17,15 +18,15 @@ _external_data_paths = {
 	"pe_enhancers": base_dir / "data/external/PsychENCODE/DER-04a_hg38lft_PEC_enhancers.bed", 
 	"project_mine": base_dir / "data/external/Summary_Statistics_GWAS_2016/als.sumstats.lmm.parquet",
 	"project_mine_hg38": base_dir / "data/external/Summary_Statistics_GWAS_2016/als.sumstats.lmm.hg38.parquet", 
-	"gencode_gtf": base_dir / "data/external/gencode/gencode.v34.basic.annotation.gtf", 
+	"encode_tfs": base_dir / "data/external/encode_TFs_bed/combined_peaks.bed",
 }
 
 class ExternalData: 
 	"""Externally downloaded data that has been preprocessed."""
 
-	def __init__(self): 
+	def __init__(self, paths): 
 
-		self.paths = _external_data_paths
+		self.paths = paths
 
 		self._rsid = None
 		self._ensg = None
@@ -34,12 +35,13 @@ class ExternalData:
 		self._PE_eqtl = None
 		self._PE_enh = None
 		self._PM_gwas = None
-		self._gencode = None
+		self._encode_tfs = None
 	
 	@property
 	def rsid(self):
 		if self._rsid is None: 
-			self._rsid = _load_rsid(self.paths["rsid"])
+			self._rsid = _load_rsid_pickle(self.paths["rsid"])
+			# self._rsid = _load_rsid_parquet(self.paths["rsid"])
 		return self._rsid
 
 	@property
@@ -79,27 +81,27 @@ class ExternalData:
 		return self._PM_gwas
 
 	@property
-	def gencode(self):
-		if self._gencode is None: 
-			self._gencode = _load_gencode_annos(self.paths["gencode_gtf"])
-		return self._gencode
-
-
-data = ExternalData()
-
-
-
+	def encode_tfs(self):
+		if self._encode_tfs is None: 
+			self._encode_tfs = _load_encode_tfs(self.paths["encode_tfs"])
+		return self._encode_tfs
 
 
 #----------------------------------------------------------------------------------------------------#
 # Load data 
 #----------------------------------------------------------------------------------------------------#
-def _load_rsid(path): 
+def _load_rsid_pickle(path): 
 	"""See README.md for how this was generated. Section `Generate variant list`."""
 	logger.write("Loading rsID file...")
 	rsid = pd.read_pickle(path)
-	# initialize loc - for some reason the first loc takes forever
-	rsid.loc[rsid.index[0]]
+	rsid.loc[rsid.index[0]] # initialize loc - for some reason the first loc takes forever
+	return rsid
+
+def _load_rsid_parquet(path): 
+	"""See README.md for how this was generated. Section `Generate variant list`."""
+	logger.write("Loading rsID file...")
+	rsid = pd.read_parquet(path)
+	rsid.loc[rsid.index[0]] # initialize loc - for some reason the first loc takes forever
 	return rsid
 
 def _load_ensg(path):
@@ -153,14 +155,10 @@ def _load_project_mine(path):
 	logger.write("Loading Project MinE GWAS...")
 	return pd.read_parquet(path)
 
-def _load_gencode_annos(path): 
-	logger.write("Loading Gencode annotations...")
+def _load_encode_tfs(path): 
+	logger.write("Loading ENCODE merged TFs...")
 	import pyranges as pr
-	gencode_annos = pr.read_gtf(path)
-	gencode_annos = pr.PyRanges(pd.concat([
-		gencode_annos.features.tss().slack(1000).as_df().assign(Feature="tss"),
-		gencode_annos.features.tes().slack(1000).as_df().assign(Feature="tes"), 
-		gencode_annos[gencode_annos.Feature == "exon"].as_df(),
-		gencode_annos.features.introns().as_df()
-	]))
-	return gencode_annos
+	return pr.read_bed(str(path))
+
+#----------------------------------------------------------------------------------------------------#
+data = ExternalData(_external_data_paths)

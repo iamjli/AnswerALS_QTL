@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+from src.utils import set_imports
+set_imports()
+
+
 from pathlib import Path
 
 base_dir = Path("/nfs/latdata/iamjli/ALS/analysis/210211_250_lines")

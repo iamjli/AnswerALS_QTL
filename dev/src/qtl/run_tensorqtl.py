@@ -48,17 +48,12 @@ def parse_tensorqtl_config_file(config_file):
 
 	return tensorqtl_paths, params
 
-# def flexible_symlink(source_path, target_path): 
-# 	if not target_path.is_symlink(): 
-# 		target_path.symlink_to(source_path)
-
-
 
 class TensorQTLManager: 
 
 	chroms = hg38.chroms
 
-	def __init__(self, results_dir, plink_prefix, phenotype_path, covariates_path, params, overwrite_config=False): 
+	def __init__(self, results_dir, plink_prefix, phenotype_path, covariates_path, params): 
 
 		self.results_dir = Path(results_dir).resolve()
 		self.plink_prefix = Path(plink_prefix).resolve()
@@ -66,18 +61,18 @@ class TensorQTLManager:
 		self.covariates_path = Path(covariates_path).resolve()
 		self.params = params
 
-		self.initialize_dir_structure()
+		self._validate_inputs()
 
 		self.config_file = self.results_dir / "config.txt"
-		self.save_config(overwrite_config)
+		
 
-	def _validate_inputs(): 
+	def _validate_inputs(self): 
 
 		assert self.phenotype_path.is_file() and self.phenotype_path.name.endswith("bed.gz")
 		assert self.covariates_path.exists()
 
 
-	def initialize_dir_structure(self): 
+	def initialize(self, overwrite_config=False): 
 		"""Sets project directory structure."""
 		self.results_dir.mkdir(exist_ok=True)
 
@@ -85,13 +80,8 @@ class TensorQTLManager:
 			output_dir = self.results_dir / f"{mode}_output"
 			output_dir.mkdir(exist_ok=True)
 
-		# flexible_symlink(self.plink_prefix.parent, self.results_dir / "input_genomes")
-		# flexible_symlink(self.phenotype_path, self.results_dir / "input_phenotypes")
-		# flexible_symlink(self.covariates_path, self.results_dir / "input_covariates")
-
-		# TODO: check that the symlinks are correct
-
 		self.split_phenotypes_by_chrom()
+		self.save_config(overwrite_config)
 
 	def split_phenotypes_by_chrom(self): 
 		"""Split phenotype file into chromosome chunks."""
