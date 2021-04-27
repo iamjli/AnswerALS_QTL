@@ -12,7 +12,7 @@ _genomes_data_paths = {
 	"gencode_gtf": base_dir / "data/external/gencode/gencode.v34.basic.annotation.gtf", 
 }
 
-class ReferenceGenomeHG38: 
+class ReferenceGenome: 
 	"""Data associated with hg38 genome build."""
 
 	def __init__(self, paths): 
@@ -84,4 +84,4 @@ def _parse_gencode_annos(gencode_gtf, tss_slack=1000, tes_slack=1000):
 	]))
 
 #----------------------------------------------------------------------------------------------------#
-hg38 = ReferenceGenomeHG38(_genomes_data_paths)
+hg38 = ReferenceGenome(_genomes_data_paths)
