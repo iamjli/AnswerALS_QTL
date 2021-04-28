@@ -6,7 +6,6 @@ import pyranges as pr
 from src import base_dir, logger
 
 
-
 _genomes_data_paths = {
 	"chrom_sizes": base_dir / "data/external/hg38/hg38.chrom.sizes", 
 	"gencode_gtf": base_dir / "data/external/gencode/gencode.v34.basic.annotation.gtf", 
@@ -24,7 +23,6 @@ class ReferenceGenome:
 
 		self._gencode_gtf = None
 		self._gencode_annos = None
-
 
 	@property
 	def chroms(self):

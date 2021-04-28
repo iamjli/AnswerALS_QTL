@@ -3,12 +3,11 @@
 import numpy as np
 import pandas as pd
 
-import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 from src import base_dir, logger
-from src.regions import Interval
+from src.utils.regions import Interval
 
 
 class TrackPlotter: 

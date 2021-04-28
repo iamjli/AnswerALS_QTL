@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
+from pathlib import Path
+import warnings
+
 import numpy as np
 import pandas as pd
 
-from pathlib import Path
-import warnings
 
 __all__ = ["counts_to_tpm", "inverse_normal_transform", "normalize_quantiles", "edgeR_calcNormFactors"]
 
@@ -14,7 +15,6 @@ __all__ = ["counts_to_tpm", "inverse_normal_transform", "normalize_quantiles", "
 def counts_to_tpm(counts, lengths): 
 	rpk = counts.div(lengths / 1000, axis=0)
 	return rpk.div(rpk.sum() / 1e6, axis=1)
-
 
 def inverse_normal_transform(M):
 	"""
@@ -79,8 +79,6 @@ def normalize_quantiles(df):
 		assert j == -1
 
 	return pd.DataFrame(M, index=df.index, columns=df.columns)
-
-
 
 def edgeR_calcNormFactors(counts, ref=None, logratio_trim=0.3, sum_trim=0.05, acutoff=-1e10, verbose=False):
 	"""

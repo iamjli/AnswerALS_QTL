@@ -1,27 +1,17 @@
 #!/usr/bin/env python3
 
-import pandas as pd
 import numpy as np
-# import math
-
-# from itertools import combinations, permutations
-
-from scipy.stats import t
-# from scipy.stats import chi2_contingency, entropy
-from statsmodels.stats.multitest import multipletests
+import pandas as pd
+from scipy.stats import t, multitest
 
 from src import logger
-from src.analysis.utils import unify_dfs
+from src.analysis import utils
 
 
 __all__ = [
 	"pearson_by_row", "pearson_by_pairs", 
 	# "pairwise_cramers_v", "pairwise_theils_u", "pairwise_correlation_ratio",
 ]
-
-
-
-
 
 #----------------------------------------------------------------------------------------------------#
 # Row-wise correlations (columns are identical)
@@ -31,7 +21,7 @@ def pearson_by_row(df1, df2, dof=None, fdr_method="bonferroni"):
 
 	# Ensure input dataframes have the same indices
 	assert df1.columns.equals(df2.columns), "columns are not the same"
-	if not df1.index.equals(df2.index): df1, df2 = unify_dfs(df1, df2)
+	if not df1.index.equals(df2.index): df1, df2 = utils.unify_dfs(df1, df2)
 
 	if dof is None: dof = df1.shape[1] - 2
 
@@ -47,7 +37,7 @@ def pearson_by_row(df1, df2, dof=None, fdr_method="bonferroni"):
 	with np.errstate(divide="ignore", invalid="ignore"):
 		r = covariance / np.sqrt(variance1 * variance2)
 		pvals = get_pvalue_from_corr_coef(r, dof)
-		fdr = multipletests(pvals, method=fdr_method)[1]
+		fdr = multitest.multipletests(pvals, method=fdr_method)[1]
 
 	return pd.DataFrame({"pearson_r": r, "pval": pvals, "fdr": fdr}, index=df1.index)
 

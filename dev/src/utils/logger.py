@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
+
 import sys
 import traceback 
-
-
 
 
 class SimpleLogger(object):
@@ -47,6 +46,5 @@ class SimpleLogger(object):
 	def flush(self, verbose=True): 
 		if verbose: 
 			self.console.write('\n')
-
 
 logger = SimpleLogger()

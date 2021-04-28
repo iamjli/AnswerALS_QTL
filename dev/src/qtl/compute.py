@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 
-import pandas as pd
-import numpy as np
 from itertools import product
+
+import numpy as np
+import pandas as pd
 from scipy import stats
+import torch
+from tensorqtl import core
 
 from src import logger
-
-# tensorqtl libraries
-import torch
-from tensorqtl.core import impute_mean, calculate_corr
-from tensorqtl.cis import calculate_association
-
 
 
 def QTL_pairwise(genotypes_df, phenotypes_df, residualizer=None, report_maf=False, return_r_matrix=False): 
@@ -27,12 +24,12 @@ def QTL_pairwise(genotypes_df, phenotypes_df, residualizer=None, report_maf=Fals
 	# Prepare variables as torch tensors
 	genotypes_t  = torch.tensor(genotypes_df.values, dtype=torch.float).to("cpu")
 	phenotypes_t = torch.tensor(phenotypes_df.values, dtype=torch.float).to("cpu")
-	impute_mean(genotypes_t)
+	core.impute_mean(genotypes_t)
 
 	dof = genotypes_t.shape[1] - 2 if residualizer is None else residualizer.dof
 
 	# Compute pairwise correlations and associated stats
-	r_nominal_t, genotype_var_t, phenotype_var_t = calculate_corr(genotypes_t, phenotypes_t, residualizer=residualizer, return_var=True)
+	r_nominal_t, genotype_var_t, phenotype_var_t = core.calculate_corr(genotypes_t, phenotypes_t, residualizer=residualizer, return_var=True)
 	std_ratio_t = torch.sqrt(phenotype_var_t.reshape(1,-1) / genotype_var_t.reshape(-1,1))
 	r_nominal_t = r_nominal_t.squeeze()
 	r2_nominal_t = r_nominal_t.double().pow(2)

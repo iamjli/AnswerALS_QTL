@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 
-import pandas as pd
-import numpy as np
-
 from itertools import product
-from scipy.stats import fisher_exact
+from pathos import multiprocessing
 
-from pathos.multiprocessing import ProcessingPool
+import numpy as np
+import pandas as pd
+from scipy import stats
 
 from src import logger
-
-
 
 
 def cv(df, axis):
@@ -18,14 +15,14 @@ def cv(df, axis):
 
 def compute_fishers_exact(s1, s2): 
 	contingency_table = pd.crosstab(s1, s2)
-	return fisher_exact(contingency_table)
+	return stats.fisher_exact(contingency_table)
 
 def pairwise_fishers_exact(df1, df2, n_cpus=24): 
 
 
 	if df1.shape[1] * df2.shape[1] > 12: 
 		indices = pd.DataFrame(product(df1.columns, df2.columns))
-		with ProcessingPool(n_cpus) as pool: 
+		with multiprocessing.ProcessingPool(n_cpus) as pool: 
 			args = ((df1[feat1], df2[feat2]) for feat1,feat2 in product(df1.columns, df2.columns))
 			results = pool.map(lambda args: compute_fishers_exact(*args), args)
 			results_df = pd.DataFrame(results, columns=["OR", "pval"])

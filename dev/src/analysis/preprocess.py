@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
-import numpy as np
-import pandas as pd
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 from src import base_dir, logger
-from src import aals, hg38
+from src.load import aals, hg38
+
 
 __all__ = ["processed"]
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
-import pandas as pd
-
 from pathlib import Path
+
+import pandas as pd
 
 from src import base_dir, logger
 
@@ -69,13 +69,9 @@ class AALSData:
 	@property
 	def gene_coords(self):
 		if self._gene_coords is None: 
-			self._gene_coords = _load_gene_coords(self.path["gene_coords"])
+			self._gene_coords = _load_gene_coords(self.paths["gene_coords"])
 		return self._gene_coords
 	
-
-	
-
-
 
 #----------------------------------------------------------------------------------------------------#
 # Load data 
@@ -93,8 +89,10 @@ def _load_ALS_Consortium_metadata(path):
 	return pd.read_excel(path, sheet_name=0, engine="openpyxl")
 
 def _load_gene_coords(path): 
-	"""Loads ENSG coords processed by `CountsData`."""
-	df = pd.read_csv(path, sep="\t", index_col=0, headers=[0,1])
-	return df["regions"]
+	"""Loads ENSG coords processed by `src.qtl.ProcessCounts`."""
+	from src.qtl import preprocess
+	regions, _ = preprocess.load_counts_metadata(path)
+	return regions
+
 #----------------------------------------------------------------------------------------------------#
 aals = AALSData(_aals_data_paths)

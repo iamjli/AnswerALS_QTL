@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 
-import pandas as pd
-
 from pathlib import Path
 
-from src import base_dir, logger
+import pandas as pd
 
+from src import base_dir, logger
 
 
 _external_data_paths = {

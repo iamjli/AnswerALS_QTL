@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+
+import re
 import warnings
 warnings.simplefilter(action='ignore', category=UserWarning)
 
@@ -6,11 +8,9 @@ import numpy as np
 import pandas as pd
 import pyranges as pr
 
-import re
-
 from src import logger
-from src import aals, hg38
 from src.query import bam
+
 
 __all__ = ["Interval", "Regions"]
 
@@ -20,6 +20,7 @@ tag_parser = re.compile(r"(?P<chrom>chr.{1,2}):(?P<start>\d*)-(?P<end>\d*)_?(?P<
 #--------------------------------------------------------------------------------------------------#
 class Interval: 
 	"""Class for performing basic queries and manipulations on a single `Interval`."""
+
 	def __init__(self, chrom, start, end, strand=None, name=None):
 
 		self.chrom = chrom if chrom.startswith("chr") else f"chr{chrom}"
@@ -28,7 +29,7 @@ class Interval:
 		self.strand = strand
 		self.name = self.tag if name is None else name
 
-		self._validate_inputs()
+		self._validate()
 
 		self.is_stranded = self.strand == "+" or self.strand == "-"
 
@@ -38,7 +39,7 @@ class Interval:
 			self.tss = self.start if self.strand == "+" else self.end
 			self.tes = self.start if self.strand == "-" else self.end
 
-	def _validate_inputs(self): 
+	def _validate(self): 
 		"""Check validity of constructor arguments."""
 		assert self.end > self.start
 		assert self.strand in ["+", "-", ".", None]
@@ -53,8 +54,10 @@ class Interval:
 
 	@classmethod
 	def load_ensg(cls, gene): 
+		from src.load import aals
 		assert gene in aals.gene_coords.index
-		interval_obj = cls(dict(**aals.gene_coords.loc[gene], name=gene))
+		chrom, start, end, strand = aals.gene_coords.loc[gene]
+		return cls(chrom, start, end, strand, name=gene)
 
 	@classmethod
 	def load(cls, *args): 
@@ -120,11 +123,6 @@ class Interval:
 		"""Expand the region by `window`, shift the region downstream (3' direction) by `shift`. """
 		return self.widen(w=w).slide(s=s, wrt_strand=wrt_strand)
 
-	def get_pileups(self): 
-		# TODO
-		# get_pileups_in_interval
-		pass
-
 	#----------------------------------------------------------------------------------------------------#
 	# Queries
 	#----------------------------------------------------------------------------------------------------#
@@ -140,6 +138,11 @@ class Interval:
 		coverages = self.as_Regions().get_atac_coverages()
 		return coverages.iloc[0]
 
+	def get_pileups(self): 
+		# TODO
+		# get_pileups_in_interval
+		pass
+
 	#----------------------------------------------------------------------------------------------------#
 	# Output formats
 	#----------------------------------------------------------------------------------------------------#
@@ -147,16 +150,13 @@ class Interval:
 	def tag(self):
 		return coords_to_tag(self.chrom, self.start, self.end)
 
-	@property
-	def tuple3(self):
+	def as_tuple3(self):
 		return self.chrom, self.start, self.end
 
-	@property
-	def tuple(self):
+	def as_tuple(self):
 		return self.chrom, self.start, self.end, self.strand
 
-	@property
-	def dict(self):
+	def as_dict(self):
 		return {"chrom": self.chrom, "start": self.start, "end": self.end, "strand": self.strand}
 
 	def as_Regions(self):
@@ -169,6 +169,8 @@ class Interval:
 		else:
 			return self.tag
 
+	def length(self): 
+		return self.end - self.start
 
 # class Peak(Interval): 
 
@@ -211,14 +213,9 @@ class Regions(pd.DataFrame):
 	def is_sorted(self):
 		shifted = self.shift(fill_value=0)
 		return ((self["start"] > shifted["start"]) | (self["chrom"] != shifted["chrom"])).all()
-	
-	@property
-	def unstrand(self):
-		return self.drop(columns=["strand"], errors="ignore")
-
 
 	#----------------------------------------------------------------------------------------------------#
-	# Make queries from other data
+	# Queries
 	#----------------------------------------------------------------------------------------------------#
 	def get_rna_coverages(self, max_size=10): 
 		return bam.get_coverages_in_regions(aals.rna_bams, self)
@@ -257,7 +254,7 @@ class Regions(pd.DataFrame):
 
 	def k_adjacent(self, interval, k=5, gf=None, report_distance=True): 
 		"""Gets the k nearest intervals in either direction."""
-		interval = self.unpack_interval_arg(interval)
+		interval = unpack_interval_arg(interval)
 		contig_features = self[self["chrom"] == interval.chrom]
 		nearest_feature = contig_features.k_nearest(interval, k=1, gf=gf, report_distance=False).index[0]
 		nearest_idx = np.where(contig_features.index == nearest_feature)[0][0]
@@ -270,7 +267,7 @@ class Regions(pd.DataFrame):
 
 	def k_nearest(self, interval, k=10, gf=None, report_distance=True): 
 		"""Gets k nearest features by absolute distance."""
-		interval = self.unpack_interval_arg(interval)
+		interval = unpack_interval_arg(interval)
 		distances = self.distances_from_interval(interval, gf=gf)
 		regions = self.reindex(distances.abs().sort_values()[:k].index).sort()
 		if report_distance: regions = regions.assign(distance=self.distances_from_interval(interval, gf=gf))
@@ -278,7 +275,7 @@ class Regions(pd.DataFrame):
 
 	def previous_feature(self, interval, n=1, gf=None, report_distance=True): 
 		"""Gets k nearest features by absolute distance."""
-		interval = self.unpack_interval_arg(interval)
+		interval = unpack_interval_arg(interval)
 		adjacent_intervals = self.k_adjacent(interval, k=1, gf=gf, report_distance=False)
 		return Interval.load(adjacent_intervals.iloc[0])
 
@@ -330,6 +327,9 @@ class Regions(pd.DataFrame):
 	#----------------------------------------------------------------------------------------------------#
 	# Constructors
 	#----------------------------------------------------------------------------------------------------#
+	def unstrand(self):
+		return self.drop(columns=["strand"], errors="ignore")
+
 	def widen(self, w): 
 		"""Expand region by w."""
 		new_regions = self.copy()
@@ -353,7 +353,10 @@ class Regions(pd.DataFrame):
 		new_regions["start"] += s - w
 		new_regions["end"] += s + w
 		return new_regions
-
+	
+	#----------------------------------------------------------------------------------------------------#
+	# Access positions
+	#----------------------------------------------------------------------------------------------------# 
 	@property
 	def start(self):
 		new_regions = self.copy()
@@ -386,10 +389,7 @@ class Regions(pd.DataFrame):
 		new_regions["start"] = np.where(new_regions["strand"] == "-", new_regions["start"], new_regions["end"]-1)
 		new_regions["end"] = new_regions["start"] + 1 
 		return new_regions
-	
-	#----------------------------------------------------------------------------------------------------#
-	# Access positions
-	#----------------------------------------------------------------------------------------------------# 
+
 	@property
 	def start_pos(self):
 		return self["start"].copy()
@@ -417,23 +417,24 @@ class Regions(pd.DataFrame):
 		if gf is None: gf = "tss" if self.is_stranded else "mid"
 		return getattr(self, f"{gf}_pos")
 
+
+
 	def distances_from_interval(self, interval, gf): 
-		interval = self.unpack_interval_arg(interval)
+		interval = unpack_interval_arg(interval)
 		target_positions = self[self["chrom"] == interval.chrom].get_pos(gf=gf)
 		distances = target_positions - interval.get_pos(gf=None)
 		return distances*-1 if interval.strand == "-" else distances
-	
-	def unpack_interval_arg(self, arg): 
-		if isinstance(arg, str) and arg in self.index: 
-			return Interval.load(self.loc[arg])
-		else: 
-			return Interval.load(arg)
+
+
+def unpack_interval_arg(arg, regions=None): 
+	if isinstance(arg, str) and arg in regions.index: 
+		return Interval.load(regions.loc[arg])
+	else: 
+		return Interval.load(arg)
 
 #----------------------------------------------------------------------------------------------------#
 # BED operations
 #----------------------------------------------------------------------------------------------------#
-
-
 def _get_overlapping_regions(regions1, regions2, col_names=None, **kwargs): 
 
 	regions1_id = _get_regions_id(regions1)
@@ -485,6 +486,8 @@ def coords_to_tag(chrom, start, end):
 
 def sort_regions(regions_df): 
 	"""Lexicographical sort on bed-style regions."""
+	from src.load import hg38
+	
 	tmp_regions = regions_df.copy()
 	tmp_regions["chrom_tag"] = tmp_regions["chrom"].str[3:]
 	tmp_regions["not_standard_chrom"] = ~tmp_regions["chrom"].isin(hg38.chroms)

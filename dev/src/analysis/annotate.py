@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pyranges as pr
 
-from pathlib import Path
-
 from src import base_dir
-from src import data
-
+from src.load import data
 
 
 _anno_dir = base_dir / "data/peak_annos"

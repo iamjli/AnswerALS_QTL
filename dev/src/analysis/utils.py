@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 from src import logger
-
 
 
 def unify_dfs(df1, df2): 
@@ -15,6 +14,3 @@ def unify_dfs(df1, df2):
 	logger.write("Number of rows (df1, df2, common): {}, {}, {}".format(len(df1), len(df2), len(common_idx)))
 
 	return df1.reindex(common_idx), df2.reindex(common_idx)
-
-
-
