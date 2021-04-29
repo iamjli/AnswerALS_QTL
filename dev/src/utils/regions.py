@@ -101,7 +101,7 @@ class Interval:
 
 	def get_pos(self, gf): 
 		"""Access position by string or returns default genomic feature."""
-		if gf is None: gf = "tss" if self.is_stranded else "mid"
+		if gf == "ref": gf = "tss" if self.is_stranded else "mid"
 		return getattr(self, f"{gf}")
 
 	#----------------------------------------------------------------------------------------------------#
@@ -149,6 +149,12 @@ class Interval:
 	@property
 	def tag(self):
 		return coords_to_tag(self.chrom, self.start, self.end)
+
+	def unstrand(self): 
+		if self.is_stranded:
+			return Interval(self.chrom, self.start, self.end, name=self.name)
+		else: 
+			return Interval(self.chrom, self.start, self.end)
 
 	def as_tuple3(self):
 		return self.chrom, self.start, self.end

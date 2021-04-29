@@ -9,7 +9,7 @@ from pysam.libcalignmentfile cimport AlignmentFile, AlignedSegment
 import pysam
 
 
-def _get_pileups_from_interval_with_deletions(str bam_file, str chrom, int start, int end, int threads): 
+def _get_pileups_from_interval_without_deletions(str bam_file, str chrom, int start, int end, int threads): 
 	"""
 	Fast implementation to get pileups from gapped reads (with deletions). 
 	"""
@@ -67,7 +67,7 @@ def _get_pileups_from_interval_with_deletions(str bam_file, str chrom, int start
 	return slopes[:,:region_len]
 
 
-def _get_pileups_from_interval_without_deletions(str bam_file, str chrom, int start, int end, int threads): 
+def _get_pileups_from_interval_with_deletions(str bam_file, str chrom, int start, int end, int threads): 
 	"""
 	Fast implementation to get pileups from filled reads (without deletions). 
 	"""

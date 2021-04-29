@@ -12,12 +12,20 @@ from src.load import data
 
 _anno_dir = base_dir / "data/peak_annos"
 
-anno_paths = {
+_anno_paths = {
 	"genomic_annos": _anno_dir / "genomic_annos.txt", 
 	"chip_annos": _anno_dir / "chip_annos.txt", 
 	"omic_counts_annos": _anno_dir / "omic_counts_annos.txt", 
 	"corr_qtl_annos": _anno_dir / "corr_qtl_annos.txt", 
 }
+
+class PeakAnnos: 
+
+	def load_genomic_annos(): 
+		return pd.read_csv(_anno_paths["genomic_annos"], sep="\t", index_col=0)
+
+	def load_chip_annos(): 
+		return pd.read_csv(_anno_paths["chip_annos"], sep="\t", index_col=0)
 
 #----------------------------------------------------------------------------------------------------#
 # Genomic annotations

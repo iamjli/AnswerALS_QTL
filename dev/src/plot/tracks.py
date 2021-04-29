@@ -10,7 +10,127 @@ from src import base_dir, logger
 from src.utils.regions import Interval
 
 
+def _override_default_kwargs(default, kwargs): 
+	return { param:kwargs.pop(param, val) for param,val in default.items() }
+
+class Plotter: 
+
+	def __init__(self, atac_plotter, rna_plotter): 
+
+		self.atac_plotter = atac_plotter
+		self.rna_plotter = rna_plotter
+
+	def load_pileups(self, *args, **kwargs): 
+		self.atac_plotter.load_pileups(*args, **kwargs)
+		self.rna_plotter.load_pileups(*args, **kwargs)
+
+	def plot_track(self, *args, **kwargs): 
+		self.atac_plotter.plot_track(*args, **kwargs)
+		self.rna_plotter.plot_track(*args, **kwargs)
+
+
+
 class TrackPlotter: 
+
+	def __init__(self, bam_query):
+
+		self._bam_query = bam_query
+		self.sample_names = self._bam_query.sample_names
+
+	def set_pileup_params(self, fill_deletions): 
+		self._fill_deletions = fill_deletions
+		self.pileup_data = None
+
+	def set_normalization(self, lib_factors=None, residualizer=None): 
+		self._norm_kwargs = dict(lib_factors=lib_factors, residualizer=residualizer)
+
+	def set_plotting_params(self, **kwargs): 
+		default_view_kwargs = {
+			"n_bins": None, "max_bins": 2000, 
+			"strand": "both", 
+			"zero_pos": None
+		}
+		self._view_kwargs = _override_default_kwargs(default_view_kwargs, kwargs)
+		self._view_kwargs["sample_names"] = self.sample_names
+
+	@classmethod
+	def load(cls, bam_query, feature_obj, fill_deletions): 
+		obj = cls(bam_query) 
+		obj.set_normalization(feature_obj.tmm_factors, feature_obj.residualizer)
+		obj.set_pileup_params(fill_deletions)
+		obj.set_plotting_params()
+		return obj
+
+	#----------------------------------------------------------------------------------------------------#
+	# Access pileup data
+	#----------------------------------------------------------------------------------------------------#
+	def load_pileups(self, interval, fill_deletions=None, padding=1000): 
+
+		fill = fill_deletions if fill_deletions is not None else self._fill_deletions
+
+		self._view_kwargs["zero_pos"] = interval.get_pos("ref")
+		self.pileup_data = self._bam_query.query_raw_pileups(interval.widen(padding), fill)
+
+	def view_pileup(self, **kwargs): 
+
+		view_kwargs = _override_default_kwargs(self._view_kwargs, kwargs)
+
+		return self.pileup_data.process(view_kwargs, self._norm_kwargs)
+
+	#----------------------------------------------------------------------------------------------------#
+	# Plotting
+	#----------------------------------------------------------------------------------------------------#
+	def _basic_plot(self, pileup, invert=False, orient="h", ax=None, **kwargs): 
+		"""
+		Plots a single track with given bounds. Must be provided as a series.
+		"""
+		if invert: pileup *= -1
+
+		plot_bounds = (pileup.index.min(), pileup.index.max())
+
+		if orient == "h": 
+			# plot track horizontally
+			sns.lineplot(data=pileup, ax=ax, legend=False)
+			ax.set(xlim=plot_bounds)
+			if invert: 
+				ax.axhline(0, color="black", alpha=0.5, linewidth=1)
+		else: 
+			# plot track vertically
+			x,y = _rotate_axes(pileup.index, pileup.values)
+			ax.plot(x,y)
+			ax.set(ylim=plot_bounds)
+
+	def plot_track(self, strand=None, feature="mean", **kwargs): 
+
+		if strand == "both": 
+			self.plot_track(strand="pos", feature=feature, **kwargs)
+			self.plot_track(strand="neg", feature=feature, invert=True, **kwargs)
+
+		else: 
+			pileup = self.view_pileup(strand=strand, **kwargs)
+			if feature == "mean": 
+				pileup = pileup.mean(axis=1)
+			elif feature == "norm_variance": 
+				pileup = pileup.std(axis=1) / pileup.mean(axis=1)
+			else: 
+				# use a specific sample as the feature
+				assert feature in pileup.columns
+				pileup = pileup[feature]
+			self._basic_plot(pileup, **kwargs)
+
+	def plot_by_genotype(self, genotypes, strand=None, **kwargs): 
+
+		if strand == "both": 
+			pass
+		else: 
+			pileup = self.get_pileup(strand=strand, **kwargs)
+			grouped_pileups = pileup.groupby(genotypes, axis=1)
+
+
+
+
+
+class _TrackPlotter: 
 
 	def __init__(self, bam_query, norm_factors, residualizer): 
 

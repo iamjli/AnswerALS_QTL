@@ -3,8 +3,8 @@
 from src.load import aals
 from src.query import bam, vcf
 
-atac_bam = bam.QueryBam(bam_files=aals.atac_bams)
-rna_bam = bam.QueryBam(bam_files=aals.rna_bams)
+atac_bams = bam.QueryBams(omic="atac", bam_paths=aals.atac_bams)
+rna_bams = bam.QueryBams(omic="rna", bam_paths=aals.rna_bams)
 
 vcf = vcf.QueryVCF(vcf_path=aals.paths["vcf"])
 

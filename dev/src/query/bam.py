@@ -11,154 +11,131 @@ from src import logger
 from src.query import pysam_utils
 
 
-
 class QueryBams: 
 	"""Interface for querying bams and caching queries."""
 
-	def __init__(self, atac_bams=None, rna_bams=None, max_cache=20, n_cpus=24, n_threads=3): 
+	def __init__(self, omic, bam_paths, max_cache=20, n_cpus=24, n_threads=3): 
 
-		self._atac_bams = atac_bams
-		self._rna_bams = rna_bams
-
+		self.omic = omic
+		self._bam_paths = bam_paths
 		self._max_cache = max_cache
-		self._pysam_kwargs = {"n_cpus": n_cpus, "n_threads": n_threads}
+		self._pysam_kwargs = dict(n_cpus=n_cpus, n_threads=n_threads)
+
+		self.sample_names = self._bam_paths.index
 
 		self._validate()
 		self.reset_cache()
 
-		# Create a multiindex series (omic, guid)
-		self.all_bams = pd.concat({"atac": self._atac_bams, "rna": self._rna_bams}, axis=0, names=["omic"])
-
 	def _validate(self): 
 
-		assert self._atac_bams is not None or self._rna_bams is not None
-
 		from src.load import aals
-		if self._atac_bams is not None: assert self._atac_bams.index.equals(aals.sample_names)
-		if self._rna_bams is not None: assert self._rna_bams.index.equals(aals.sample_names)
-		self.sample_names = aals.sample_names
+		assert self.sample_names.equals(aals.sample_names)
 
+	#----------------------------------------------------------------------------------------------------#
+	# Manage cache
+	#----------------------------------------------------------------------------------------------------#
 	def reset_cache(self): 
 		self._pileup_cache = list()
 		self._coverage_cache = list()
 
 	def _pileup_query_params(self, omic, interval, fill_deletions): 
 		query_params = {"omic": omic, "fill_deletions": fill_deletions}
-		return {**query_params, **interval.as_dict()}
+		return {**query_params, **interval.unstrand().as_dict()}
 
 	def _access_pileup_cache(self, query_params): 
-		"""Check that a previous query has been cached."""
-
+		"""
+		Check that a previous query has been cached. Returns subsetted array, otherwise None.
+		"""
 		# Compare query to every entry in the cache 
-		for entry in self._pileup_cache: 
-			if entry.compare_params_with(query_params):
-				logger.write(f"Loading cached {query_params['omic']} pileup data...")
-				return entry.get_pileup_data(query_params)
+		for cached_pileupdata_obj in self._pileup_cache: 
+			pileupdata_obj = cached_pileupdata_obj._compare_params_with(query_params)
+			if pileupdata_obj: 
+				logger.write(f"Loading cached {query_params['omic'].upper()} pileup data... ")
+				return pileupdata_obj
 
-		logger.write(f"No cached matches found. Generating {query_params['omic']} pileup data...")
+		logger.write(f"No cached matches found. Generating {query_params['omic'].upper()} pileup data... ")
 		return None
 
-	def _update_pileup_cache(self, pileupdata_obj): 
+	def _update_pileup_cache(self, raw_pileups, query_params): 
 		"""Maintains cache."""
+		pileupdata_obj = PileupData(raw_pileups, query_params)
 		self._pileup_cache.append(pileupdata_obj)
+
+		# TODO: Prune by removing those in subset
 
 		# Count large pileup queries and pop the first large one
 		large_entry_idx = [i for i,entry in enumerate(self._pileup_cache) if entry.n_pos > 1e4]
 		if len(large_entry_idx) > self._max_cache: 
 			del self._pileup_cache[large_entry_idx[0]]  # remove the oldest large entry
 
-	def _query_raw_pileups(self, omic, interval, fill_deletions=True, format_kwargs=dict()): 
+		return pileupdata_obj
+
+	def display_cache(self): 
+		for entry in self._pileup_cache: 
+			print(entry)
+
+	#----------------------------------------------------------------------------------------------------#
+	# Pileup queries
+	#----------------------------------------------------------------------------------------------------#
+	def query_raw_pileups(self, interval, fill_deletions): 
+		"""Returns PileupData instance"""
+		chrom, start, end = interval.as_tuple3()
+
+		# Check for previously queried raw pileups
+		query_params = self._pileup_query_params(self.omic, interval, fill_deletions)
+		pileupdata_obj = self._access_pileup_cache(query_params)
+
+		# If no matches exist, make query
+		if not pileupdata_obj: 
+			raw_pileups = get_pileups_in_interval(self._bam_paths, chrom, start, end, fill_deletions, **self._pysam_kwargs)
+			pileupdata_obj = self._update_pileup_cache(raw_pileups, query_params)
+
+		return pileupdata_obj
+
+	def get_pileup_data(self, interval, fill_deletions, norm_kwargs=dict(), view_kwargs=dict()): 
+		"""Ad hoc queries that return pileup data directly"""
 
 		chrom, start, end = interval.as_tuple3()
 
-		query_params = self._pileup_query_params(omic, interval, fill_deletions)
-		cached_result = self._access_pileup_cache(query_params)
+		# Check for previously queried raw pileups
+		query_params = self._pileup_query_params(self.omic, interval, fill_deletions)
+		pileupdata_obj = self._access_pileup_cache(query_params)
 
-		if cached_result: return cached_result
+		# If no matches exist, make query
+		if not pileupdata_obj: 
+			raw_pileups = get_pileups_in_interval(self._bam_paths, chrom, start, end, fill_deletions, **self._pysam_kwargs)
+			pileupdata_obj = self._update_pileup_cache(raw_pileups, query_params)
 
-		results = get_pileups_in_interval(self.all_bams[omic], chrom, start, end, fill_deletions, **self._pysam_kwargs)
-		results = PileupData(results, query_params)
-		self._update_pileup_cache(results)
-
-		return results
-
-	def query_atac_pileups(self, interval, fill_deletions=True, format_kwargs=dict()): 
-
-		return self._query_raw_pileups("atac", interval, fill_deletions, format_kwargs)
-
-	def query_rna_pileups(self, interval, fill_deletions=True, format_kwargs=dict()): 
-
-		return self._query_raw_pileups("rna", interval, fill_deletions, format_kwargs)
-
-	# def query_raw_pileups(self, omic, interval, fill_deletions=True, format_kwargs=dict()): 
-
-	# 	chrom, start, end = interval.as_tuple3()
-
-	# 	query_params = self._pileup_query_params(omic, interval, fill_deletions)
-	# 	cached_result = self._access_pileup_cache(query_params)
-
-	# 	if cached_result: return cached_result
-
-	# 	results = get_pileups_in_interval(self.all_bams[omic], chrom, start, end, fill_deletions, **self._pysam_kwargs)
-	# 	results = PileupData(results, query_params)
-	# 	self._update_pileup_cache(results)
-
-	# 	return results
-
-	def query_pileups(self, interval, fill_deletions=True, format_kwargs=dict()): 
-
-		atac_params = self._pileup_query_params("atac", interval, fill_deletions)
-		rna_params = self._pileup_query_params("rna", interval, fill_deletions)
-
-		atac_results = self._access_pileup_cache(atac_params)
-		rna_results = self._access_pileup_cache(rna_params)
-
-		if atac_results is None and rna_results is None: 
-
-			results = get_pileups_in_interval(self.all_bams, chrom, start, end, fill_deletions, **self._pysam_kwargs)
-
-			atac_results = [result for omic,result in zip(self.all_bams.index.get_level_values("omic"), results) if omic == "atac"]
-			rna_results = [result for omic,result in zip(self.all_bams.index.get_level_values("omic"), results) if omic == "rna"]
-
-			atac_results = PileupData(atac_results, atac_params)
-			rna_results = PileupData(rna_results, rna_params)
-
-			self._update_pileup_cache(atac_results)
-			self._update_pileup_cache(rna_results)
-
-		elif atac_results is None:
-			atac_results = self.query_atac_pileups(interval, fill_deletions, format_kwargs=dict())
-
-		elif rna_results is None: 
-			rna_results = self.query_rna_pileups(interval, fill_deletions, format_kwargs=dict())
-
-		else: pass
-
-		return atac_results, rna_results
-
+		# Bin and nomalize data
+		logger.write(f"Creating view...")
+		view_kwargs["sample_names"] = self.sample_names
+		data = pileupdata_obj.process(view_kwargs, norm_kwargs)
+		return data
 
 
 
 class PileupData: 
 
-	def __init__(self, data, params):
+	def __init__(self, raw, params):
 
-		self.data = data
+		self.raw = raw
 		self.params = params
 
 		self._validate()
 
 		self.omic = self.params["omic"]
-		self.start, self.end = self.params["start"], self.params["end"]
+		self.chrom, self.start, self.end = self.params["chrom"], self.params["start"], self.params["end"]
 		self.n_pos = self.end - self.start
 		self.positions = np.arange(self.start, self.end)
+
+		# self.normalized, self._lib_factors, self._residualizer = None, None, None
 
 	def _validate(self): 
 
 		for param in ["chrom", "start", "end", "omic", "fill_deletions"]: assert param in self.params
-		assert self.data[0].shape[1] == self.params["end"] - self.params["start"]
+		assert self.raw.shape[1] == self.params["end"] - self.params["start"]
 
-	def compare_params_with(self, other_params): 
+	def _compare_params_with(self, other_params): 
 		"""Compares query params to see if there's a match. Coordinates may be a subset of previous query."""
 
 		# These need to be exactly the same
@@ -176,168 +153,85 @@ class PileupData:
 			print(other_params)
 			print(self.params)
 
-		return True
+		# Return subsetted data
+		start_idx, end_idx = other_params["start"] - self.start, other_params["end"] - self.start
+		return PileupData(self.raw[:,start_idx:end_idx,:], other_params)
 
-	def apply_operation(self, func, opt_args=(), n_cpus=1): 
-		"""
-		Function must take a single sample pileup data as its first argument. Optional args may
-		be provided. 
-		"""
-		args = ((p, *opt_args) for p in self.data)
-		if n_cpus > 1: 
-			return multiprocess_wrapper(func, args)
-		else: 
-			return [func(*arg) for arg in args]
+	def __repr__(self): 
+		return f"{self.omic.upper()} pileup ({'filled' if self.params['fill_deletions'] else 'gapped'}) at {self.chrom}:{self.start}-{self.end} ({self.n_pos}bp)"
 
-	def get_pileup_data(self, query_params):
+	#----------------------------------------------------------------------------------------------------#
+	# Queries of raw pileup data
+	#----------------------------------------------------------------------------------------------------#
+	def get_raw_pileups_by_coords(self, start, end):
 		"""
 		Return self if query is the same, otherwise return a view of a subset. 
 		"""
-		data = self.subset_data_by_coords(query_params["start"], query_params["end"])
-		return PileupData(data, query_params)
-
-	# Data queries
-	def subset_data_by_coords(self, start, end): 
 		start_idx, end_idx = start - self.start, end - self.start
-		subset_pileup = lambda p: p[:,start_idx:end_idx]
-		return self.apply_operation(subset_pileup)
+		return self.raw[:,start_idx:end_idx,:]
 
-	def query(self, start, end, strand, as_df): 
-		# TODO: bin
-		pass
+	def process(self, view_kwargs, norm_kwargs): 
 
-	def __repr__(self): 
-		return f"{self.omic.upper()} pileup at {self.chrom}:{self.start}-{self.end} (fill={self.params["fill_deletions"]})"
+		# Get data by strand
+		strand = view_kwargs.pop("strand", None)
 
-
-
-
-
-
-
-
-
-
-
-
-class QueryBam: 
-	"""Interface for querying bams and caching queries."""
-
-	def __init__(self, bam_files, max_cache=20, n_cpus=24): 
-
-		self.bam_files = bam_files
-		self.max_cache = max_cache
-		self.n_cpus = n_cpus
-
-		self.sample_names = self.bam_files.index
-
-		self.reset_cache()
-
-	def reset_cache(self): 
-		self._pileup_cache = list()
-		self._coverage_cache = list()
-
-	def _cache_pileup(self, interval, pileup, params): 
-		"""Manage cacheing for pileup queries."""
-
-		cache_entry = {"interval": interval.tag, "params": params, "pileup": pileup}
-		self._pileup_cache.append(cache_entry)
-
-		# Only count large pileup queries
-		n_large = len([None for entry in self._pileup_cache if len(entry["pileup"]) > 1e4])
-		if n_large > self.max_cache: 
-			self._pileup_cache = self._pileup_cache[1:]
-
-	def _check_pileup_cache(self, interval, params): 
-		"""Check that a previous query has been cached."""
-		for cache_entry in self._pileup_cache: 
-			if interval.tag == cache_entry["interval"] and params == cache_entry["params"]: 
-				return cache_entry["pileup"]
-		return None
-
-	def query_pileup(self, interval, 
-		lib_factors=None, strand=None, 
-		relative_to=None, as_df=False, 
-		verbose=True, **params): 
-		# TODO: move these to a separate function and implement attribute setters
-
-		# Initialize query parameters
-		chrom, start, end = interval.tuple3
-		if "disjoint" not in params: params["disjoint"] = True
-
-		# Check cache for previous results
-		pileup = self._check_pileup_cache(interval, params)
-		if pileup is not None:
-			logger.write("loaded from cache", verbose=verbose)
+		if strand is None: 
+			data = self.raw.sum(axis=0)
+		elif strand == "pos": 
+			data = self.raw[0]
+		elif strand == "neg": 
+			data = self.raw[1]
 		else: 
-			# Otherwise generate results and cache
-			pileup = get_pileups_in_interval(self.bam_files, chrom, start, end, **{**params, **{"n_cpus": self.n_cpus}})
-			self._cache_pileup(interval, pileup, params)
-			logger.write("wrote to cache", verbose=verbose)
+			raise ValueError
 
-		# Format results
-		processed_pileup = process_pileup(pileup, lib_factors=lib_factors, strand=strand)
-		if as_df: 
-			processed_pileup = self.pileup_array_to_df(processed_pileup, interval, relative_to)
-		
-		return processed_pileup
+		# Bin data
+		data, bin_positions = bin_pileup_data(data, self.positions, **view_kwargs)
 
+		# Normalize binned data
+		data = normalize_pileup_data(data, **norm_kwargs)
 
-	def pileup_array_to_df(self, pileup, interval=None, relative_to=None): 
-		"""Converts numpy query result to dataframe."""
-		# assert not (invert_index and relative_to is None), "Index should be centered before inverting"
+		# Return specified format
+		if view_kwargs.pop("as_df", True): 
 
-		index = range(interval.start, interval.end)
-		if pileup.ndim == 2: 
-			pileup_df = pd.DataFrame(pileup, index=index, columns=self.sample_names)
+			sample_names = view_kwargs.pop("sample_names", None)
+			zero_pos = view_kwargs.pop("zero_pos", None)
+
+			if zero_pos: bin_positions -= zero_pos
+
+			return pd.DataFrame(data, index=bin_positions, columns=sample_names)
 		else: 
-			assert pileup.ndim == 3 and pileup.shape[0] == 2
-			pileup_df = pd.concat({
-				"pos": pd.DataFrame(pileup[0], index=index, columns=self.sample_names), 
-				"neg": pd.DataFrame(pileup[1], index=index, columns=self.sample_names), 
-			}, axis=1)
-
-		if relative_to: 
-			center_pos = getattr(interval, relative_to)
-			pileup_df.index = pileup_df.index - center_pos
-
-		# if invert_index: 
-		# 	pileup_df.index = pileup_df.index[::-1]
-		# 	pileup_df.sort_index(inplace=True)
-
-		return pileup_df
+			return data
 
 
+def bin_pileup_data(data, positions, n_bins=None, max_bins=1000, **kwargs): 
 
-#----------------------------------------------------------------------------------------------------#
-# QueryBam helpers
-#----------------------------------------------------------------------------------------------------#
-# def process_pileup(pileup, lib_factors=None, strand=None): 
-	
-# 	processed_pileup = pileup.copy()
+	n_pos, n_samples = data.shape[0], data.shape[1]
 
-# 	# Get stranded pileups
-# 	if strand == "pos": 
-# 		processed_pileup = processed_pileup[0]
-# 	elif strand == "neg": 
-# 		processed_pileup = processed_pileup[1]
-# 	elif strand == "both": 
-# 		processed_pileup = processed_pileup.sum(axis=0)
-# 	else: 
-# 		pass
+	if n_bins is None:
+		n_bins = max_bins
+		while n_pos / n_bins > max_bins: n_bins -= 1
 
-# 	# Normalize by library size
-# 	if lib_factors is not None: 
-# 		if isinstance(lib_factors, pd.Series): lib_factors = lib_factors.values
-# 		processed_pileup = processed_pileup / lib_factors
+	bin_edges = np.linspace(positions[0], positions[-1], num=n_bins+1)
+	bins = np.digitize(positions, bin_edges) - 1
 
-# 	return processed_pileup
+	# Get mean of values in each bin
+	binned_data = np.zeros((n_bins, n_samples))
+	bin_positions = np.zeros((n_bins))
+	for i in range(n_bins): 
+		binned_data[i] = data[bins == i].mean(axis=0)
+		bin_positions[i] = positions[bins == i].mean()
 
-# def invert_pileup(pileup): 
-# 	pileup.index = pileup.index[::-1]
-# 	pileup.sort_index(inplace=True)
+	return binned_data, bin_positions.astype(int)
 
+def normalize_pileup_data(data, lib_factors=None, residualizer=None): 
 
+	if lib_factors is not None: 
+		data = data / lib_factors.values
+
+	if residualizer is not None: 
+		data = residualizer.transform(data)
+
+	return data
 
 
 
@@ -355,17 +249,21 @@ def _get_library_size(bam_file):
 #----------------------------------------------------------------------------------------------------#
 # Pileups
 #----------------------------------------------------------------------------------------------------#
-def get_pileups_in_interval(bam_files, chrom, start, end, fill_deletions=True, n_cpus=24, n_threads=3):
+def get_pileups_in_interval(bam_files, chrom, start, end, fill_deletions, n_cpus=24, n_threads=3):
 	"""
 	Get pileups in interval by strand.
 	"""
+	assert fill_deletions is not None
 	args = ((path, chrom, start, end, n_threads) for path in bam_files)
 
 	func = (pysam_utils._get_pileups_from_interval_with_deletions if fill_deletions 
 			else pysam_utils._get_pileups_from_interval_without_deletions)
 
 	results = multiprocess_wrapper(func, args, n_cpus=n_cpus)
-	return results
+	results_np = np.zeros((*results[0].shape, len(results)))
+	for i,result in enumerate(results): 
+		results_np[:,:,i] = result
+	return results_np
 
 	# if return_params: 
 	# 	query_params = {"chrom": chrom, "start": start, "end": end, "fill_detections": True}
