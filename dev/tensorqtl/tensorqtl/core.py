@@ -348,7 +348,7 @@ def read_phenotype_bed_window_region(phenotype_bed):
 
         phenotype_pos_df.loc[phenotype_pos_df.strand == "-", "tss"] = phenotype_pos_df.loc[phenotype_pos_df.strand == "-", "end"]
         phenotype_pos_df.loc[phenotype_pos_df.strand == "-", "tes"] = phenotype_pos_df.loc[phenotype_pos_df.strand == "-", "start"]
-        phenotype_pos_df = phenotype_pos_df[["chr", "tss", "tes"]]
+        phenotype_pos_df = phenotype_pos_df[["chr", "tss", "tes", "strand"]]
         phenotype_pos_df["tss"] = phenotype_pos_df["tss"].astype(int)
         phenotype_pos_df["tes"] = phenotype_pos_df["tes"].astype(int)
         phenotype_df.drop(['chr', 'start', 'end', "strand"], axis=1, inplace=True)

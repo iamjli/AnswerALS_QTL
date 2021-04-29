@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
+
 import sys
 import traceback 
 
-import pandas as pd
-import numpy as np
-from scipy import interpolate, stats
-
-
-flatten = lambda l: [item for sublist in l for item in sublist]
-
 
 class SimpleLogger(object):
+
 	def __init__(self, logfile=None, verbose=True):
+
 		self.console = sys.stdout
 		self.verbose = verbose
+		
 		if logfile is not None:
 			self.log = open(logfile, 'w')
 		else:
@@ -50,8 +47,4 @@ class SimpleLogger(object):
 		if verbose: 
 			self.console.write('\n')
 
-
-
-
-
-
+logger = SimpleLogger()

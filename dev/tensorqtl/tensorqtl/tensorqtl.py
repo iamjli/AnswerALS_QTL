@@ -70,6 +70,7 @@ def main():
         phenotype_df, phenotype_pos_df = read_phenotype_bed_window_region(args.phenotype_bed)
     else: 
         assert False
+    # print(phenotype_pos_df.head())
 
     tss_dict = phenotype_pos_df[["chr", "tss"]].T.to_dict()
     if args.covariates is not None:

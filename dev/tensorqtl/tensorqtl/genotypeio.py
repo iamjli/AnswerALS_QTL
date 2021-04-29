@@ -361,10 +361,14 @@ class InputGeneratorCis(object):
         self.group_s = None
         self.window = window
 
-        self.phenotype_tss = self.phenotype_pos_df['tss'].to_dict()
-        self.phenotype_chr = self.phenotype_pos_df['chr'].to_dict()
-        if "tes" in self.phenotype_pos_df.columns: 
-            self.phenotype_tes = self.phenotype_pos_df['tes'].to_dict()
+        phenotype_pos_df_JL = self.phenotype_pos_df.copy()
+        if "strand" not in phenotype_pos_df_JL.columns: 
+            phenotype_pos_df_JL["strand"] = "+"
+        self.phenotype_tss = phenotype_pos_df_JL['tss'].to_dict()
+        self.phenotype_chr = phenotype_pos_df_JL['chr'].to_dict()
+        self.phenotype_strand = phenotype_pos_df_JL['strand'].replace({"+":1, "-":-1}).to_dict()
+        if "tes" in phenotype_pos_df_JL.columns: 
+            self.phenotype_tes = phenotype_pos_df_JL['tes'].to_dict()
         else: 
             self.phenotype_tes = self.phenotype_tss
 
