@@ -2,7 +2,8 @@
 
 import numpy as np
 import pandas as pd
-from scipy.stats import t, multitest
+from scipy.stats import t
+from statsmodels.stats import multitest
 
 from src import logger
 from src.analysis import utils
@@ -30,6 +31,8 @@ def pearson_by_row(df1, df2, dof=None, fdr_method="bonferroni"):
 	vals_norm1 = vals1 - vals1.mean(axis=0)
 	vals_norm2 = vals2 - vals2.mean(axis=0)
 
+	# print(vals_norm1)
+
 	covariance = (vals_norm1 * vals_norm2).sum(axis=0)
 	variance1 = np.power(vals_norm1, 2).sum(axis=0)
 	variance2 = np.power(vals_norm2, 2).sum(axis=0)
@@ -37,9 +40,11 @@ def pearson_by_row(df1, df2, dof=None, fdr_method="bonferroni"):
 	with np.errstate(divide="ignore", invalid="ignore"):
 		r = covariance / np.sqrt(variance1 * variance2)
 		pvals = get_pvalue_from_corr_coef(r, dof)
-		fdr = multitest.multipletests(pvals, method=fdr_method)[1]
-
-	return pd.DataFrame({"pearson_r": r, "pval": pvals, "fdr": fdr}, index=df1.index)
+		if fdr_method: 
+			fdr = multitest.multipletests(pvals, method=fdr_method)[1]
+			return pd.DataFrame({"pearson_r": r, "pval": pvals, "fdr": fdr}, index=df1.index)
+		else: 
+			return pd.DataFrame({"pearson_r": r, "pval": pvals}, index=df1.index)
 
 
 def pearson_by_pairs(df1, df2, pairs_df, dof=None, fdr_method="bonferroni"): 
@@ -56,8 +61,20 @@ def pearson_by_pairs(df1, df2, pairs_df, dof=None, fdr_method="bonferroni"):
 
 
 def get_pvalue_from_corr_coef(coeffs, dof): 
-	tstat = np.abs(coeffs * dof / np.sqrt(1 - np.power(coeffs, 2)))
+	tstat = np.abs(coeffs * np.sqrt(dof) / np.sqrt(1 - np.power(coeffs, 2)))
 	return t.sf(tstat, dof) * 2
+
+
+
+def correlate_dfs(df1, df2, method="pearson"):
+	if method == "spearman": 
+		df1, df2 = df1.rank(axis=0), df2.rank(axis=0)
+	n = len(df1)
+	v1, v2 = df1.values, df2.values
+	sums = np.multiply.outer(v2.sum(0), v1.sum(0))
+	stds = np.multiply.outer(v2.std(0), v1.std(0))
+	return pd.DataFrame((v2.T.dot(v1) - sums / n) / stds / n,
+						df2.columns, df1.columns)
 
 
 #----------------------------------------------------------------------------------------------------#

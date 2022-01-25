@@ -7,10 +7,18 @@ import pandas as pd
 from src import base_dir, logger
 
 
+# _aals_data_paths = {
+# 	"metadata": base_dir / "tensorqtl_runs/harmonized_metadata.210418.txt", 
+# 	"bams": base_dir / "tensorqtl_runs/harmonized_data_paths.local.210418.txt", 
+# 	"vcf": base_dir / "tensorqtl_runs/genomes_210409/biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.vcf.gz", 
+# 	"aals_metadata": base_dir / "data/metadata/ALS Consortium DNA Metadata 20201015 .xlsx",
+# 	"gene_coords": base_dir / "tensorqtl_runs/phenotypes_210422/rna.metadata.txt.gz",
+# }
+
 _aals_data_paths = {
 	"metadata": base_dir / "tensorqtl_runs/harmonized_metadata.210418.txt", 
 	"bams": base_dir / "tensorqtl_runs/harmonized_data_paths.local.210418.txt", 
-	"vcf": base_dir / "tensorqtl_runs/genomes_210409/biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.vcf.gz", 
+	"vcf": base_dir / "tensorqtl_runs/beagle5_210512/filt_anno/biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.vcf.gz", 
 	"aals_metadata": base_dir / "data/metadata/ALS Consortium DNA Metadata 20201015 .xlsx",
 	"gene_coords": base_dir / "tensorqtl_runs/phenotypes_210422/rna.metadata.txt.gz",
 }

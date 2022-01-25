@@ -11,7 +11,7 @@ from tensorqtl import core
 from src import logger
 
 
-def QTL_pairwise(genotypes_df, phenotypes_df, residualizer=None, report_maf=False, return_r_matrix=False): 
+def QTL_pairwise(genotypes_df, phenotypes_df, residualizer=None, report_maf=False, return_r_matrix=False, dof=None): 
 	"""
 	Wrapper for `tensorqtl.core.calculate_corr` and reimplementation of `tensorqtl.cis.calculate_association`.
 	Sample names must be axis 0 for each input (i.e. index for pd.Series and columns for pd.DataFrame)
@@ -19,14 +19,18 @@ def QTL_pairwise(genotypes_df, phenotypes_df, residualizer=None, report_maf=Fals
 	if isinstance(genotypes_df, pd.Series): genotypes_df = genotypes_df.to_frame().T
 	if isinstance(phenotypes_df, pd.Series): phenotypes_df = phenotypes_df.to_frame().T
 
+	if phenotypes_df.shape[0] == 0: return None
+
 	assert genotypes_df.columns.equals(phenotypes_df.columns)
 
 	# Prepare variables as torch tensors
+	genotypes_df = genotypes_df.fillna(-1)
 	genotypes_t  = torch.tensor(genotypes_df.values, dtype=torch.float).to("cpu")
 	phenotypes_t = torch.tensor(phenotypes_df.values, dtype=torch.float).to("cpu")
 	core.impute_mean(genotypes_t)
 
-	dof = genotypes_t.shape[1] - 2 if residualizer is None else residualizer.dof
+	if dof is None: 
+		dof = genotypes_t.shape[1] - 2 if residualizer is None else residualizer.dof
 
 	# Compute pairwise correlations and associated stats
 	r_nominal_t, genotype_var_t, phenotype_var_t = core.calculate_corr(genotypes_t, phenotypes_t, residualizer=residualizer, return_var=True)

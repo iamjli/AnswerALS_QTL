@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src import logger
+from src import base_dir, logger
 from src.load import aals
 from src.qtl import normalize
 from src.utils.regions import Regions
@@ -24,7 +24,7 @@ class ProcessCounts:
 		self.lengths = lengths.copy()
 
 		self.sample_names = self.counts.columns
-		self.validate()
+		# self.validate()
 
 		# Library norm factors 
 		self._cpm_factors = None
@@ -198,6 +198,18 @@ def load_atac_diffbind(counts_path):
 
 	counts.index = regions.index.copy()
 	return regions, counts
+
+#----------------------------------------------------------------------------------------------------#
+# Prepare phenotype files for tensorqtl and PEER correction
+#----------------------------------------------------------------------------------------------------#
+def load_splice_leafcutter(raw_splice_path=None): 
+	if raw_splice_path is None: 
+		raw_splice_path = base_dir / "data/answer_mirror/splice/testall288_perind_numers.counts"
+
+	df = pd.read_csv(raw_splice_path, sep=" ", index_col=0)
+
+	return df
+
 
 #----------------------------------------------------------------------------------------------------#
 # Prepare phenotype files for tensorqtl and PEER correction

@@ -24,9 +24,17 @@ class Plotter:
 		self.atac_plotter.load_pileups(*args, **kwargs)
 		self.rna_plotter.load_pileups(*args, **kwargs)
 
+	def _basic_plot(self, *args, **kwargs): 
+		self.atac_plotter._basic_plot(*args, **kwargs)
+		self.rna_plotter._basic_plot(*args, **kwargs)
+
 	def plot_track(self, *args, **kwargs): 
 		self.atac_plotter.plot_track(*args, **kwargs)
 		self.rna_plotter.plot_track(*args, **kwargs)
+
+	def plot_by_genotype(self, *args, **kwargs): 
+		self.atac_plotter.plot_by_genotype(*args, **kwargs)
+		self.rna_plotter.plot_by_genotype(*args, **kwargs)
 
 
 
@@ -48,7 +56,7 @@ class TrackPlotter:
 		default_view_kwargs = {
 			"n_bins": None, "max_bins": 2000, 
 			"strand": "both", 
-			"zero_pos": None
+			"zero_pos": 0
 		}
 		self._view_kwargs = _override_default_kwargs(default_view_kwargs, kwargs)
 		self._view_kwargs["sample_names"] = self.sample_names
@@ -64,12 +72,12 @@ class TrackPlotter:
 	#----------------------------------------------------------------------------------------------------#
 	# Access pileup data
 	#----------------------------------------------------------------------------------------------------#
-	def load_pileups(self, interval, fill_deletions=None, padding=1000): 
+	def load_pileups(self, interval, fill_deletions=None): 
 
 		fill = fill_deletions if fill_deletions is not None else self._fill_deletions
 
-		self._view_kwargs["zero_pos"] = interval.get_pos("ref")
-		self.pileup_data = self._bam_query.query_raw_pileups(interval.widen(padding), fill)
+		# self._view_kwargs["zero_pos"] = interval.get_pos("ref")
+		self.pileup_data = self._bam_query.query_raw_pileups(interval, fill)
 
 	def view_pileup(self, **kwargs): 
 
@@ -121,10 +129,15 @@ class TrackPlotter:
 	def plot_by_genotype(self, genotypes, strand=None, **kwargs): 
 
 		if strand == "both": 
-			pass
+			self.plot_by_genotype(genotypes=genotypes, strand="pos", **kwargs)
+			self.plot_by_genotype(genotypes=genotypes, strand="neg", invert=True, **kwargs)
 		else: 
-			pileup = self.get_pileup(strand=strand, **kwargs)
-			grouped_pileups = pileup.groupby(genotypes, axis=1)
+			pileup = self.view_pileup(strand=strand, **kwargs)
+			grouped_pileups = pileup.groupby(genotypes, axis=1).mean()
+			for col in grouped_pileups.columns.sort_values(): 
+				self._basic_plot(grouped_pileups[col], **kwargs)
+
+
 
 
 

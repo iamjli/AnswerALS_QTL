@@ -114,7 +114,11 @@ class TensorQTLManager:
 			return 
 
 		# 1. Load and merge all individual chromosome results
-		cis_results = [self._load_tensorqtl_cis_output(self.cis_output_path(chrom)) for chrom in _chroms]
+		try: 
+			cis_results = [self._load_tensorqtl_cis_output(self.cis_output_path(chrom)) for chrom in _chroms]
+		except: 
+			cis_results = [self._load_tensorqtl_cis_output(self.cis_output_path(chrom)) for chrom in _chroms[:-1]]
+
 		cis_results = pd.concat(cis_results)
 
 		# 2. Compute pval thresholds per phenotype
@@ -135,10 +139,13 @@ class TensorQTLManager:
 		return self.results_dir / "cis_qtl_nominal_sig.fdr_{}.txt.gz".format(str(fdr))
 
 	def _load_tensorqtl_cis_nominal_output(self, path, columns=None):
-		if columns is None: columns = ["phenotype_id", "variant_id", "tss_distance", "pval_nominal", "slope"]
+		if columns is False: 
+			return pd.read_parquet(path)
+		if columns is None: 
+			columns = ["phenotype_id", "variant_id", "tss_distance", "pval_nominal", "slope"]
 		return pd.read_parquet(path, columns=columns)
 
-	def process_cis_nominal_results(self, fdr): 
+	def process_cis_nominal_results(self, fdr, write=True): 
 		"""
 		Generates file with all significant QTLs.
 		"""
@@ -153,16 +160,22 @@ class TensorQTLManager:
 		# 2. Load each cis nominal file and apply threshold filter
 		cis_nominal_results = []
 		for chrom in _chroms: 
-			logger.update(f"Reading cis nominal results for {chrom}...")
-			path = self.cis_nominal_output_path(chrom)
-			results_df = self._load_tensorqtl_cis_nominal_output(path)
-			results_df = results_df.loc[results_df["pval_nominal"] <= results_df["phenotype_id"].map(thresholds)]
-			cis_nominal_results.append(results_df)
+			try:
+				logger.update(f"Reading cis nominal results for {chrom}...")
+				path = self.cis_nominal_output_path(chrom)
+				results_df = self._load_tensorqtl_cis_nominal_output(path)
+				results_df = results_df.loc[results_df["pval_nominal"] <= results_df["phenotype_id"].map(thresholds)]
+				cis_nominal_results.append(results_df)
+			except: 
+				assert chrom == "chrY"
 		cis_nominal_results = pd.concat(cis_nominal_results, ignore_index=True)
 
 		# 3. Write results
-		cis_nominal_results.to_csv(cis_nominal_processed_path, sep="\t", index=True, header=True, compression="gzip") 
-		logger.write("cis results written to:", str(cis_nominal_processed_path))
+		if write: 
+			cis_nominal_results.to_csv(cis_nominal_processed_path, sep="\t", index=True, header=True, compression="gzip") 
+			logger.write("cis results written to:", str(cis_nominal_processed_path))
+
+		return cis_nominal_results
 
 	def pickle_cis_nominal(self): 
 		"""
@@ -211,10 +224,13 @@ class TensorQTLManager:
 		cis_nominal_output_dir = self.results_dir / "cis_nominal_output"
 		cis_nominal_results = []
 		for chrom in _chroms: 
-			logger.update(f"Reading cis nominal results for {chrom}...")
-			path = self.cis_nominal_output_path(chrom)
-			results_df = self._load_tensorqtl_cis_nominal_output(path, chrom)
-			cis_nominal_results.append(results_df)
+			try:
+				logger.update(f"Reading cis nominal results for {chrom}...")
+				path = self.cis_nominal_output_path(chrom)
+				results_df = self._load_tensorqtl_cis_nominal_output(path)
+				cis_nominal_results.append(results_df)
+			except: 
+				assert chrom == "chrY"
 		return pd.concat(cis_nominal_results, ignore_index=True)
 
 
@@ -344,3 +360,30 @@ def qvalue(pv, m=None, pi0=None):
 	fdr = pi0 * m * t / (rank + 1)  # FDR(t) at different thresholds
 	qv = np.array([ fdr[t >= pval].min() for pval in pv ])  
 	return qv, pi0
+
+def pi1(pv, m=None, pi0=None): 
+
+	from scipy import interpolate
+
+	assert(pv.min() >= 0 and pv.max() <= 1), "p-values should be between 0 and 1"
+
+	if m is None: m = len(pv) # set the number of tests
+		
+	if pi0 is None: 
+		if len(pv) < 100: # skip interpolation if number of hypotheses is small
+			pi0 = 1.0
+		
+		else: 
+			lambdas = np.arange(0, 0.95, 0.01)
+			pi0_arr = np.array([(pv > lam).sum()/m/(1-lam) for lam in lambdas])
+		
+			# fit natural cubic spline
+			tck = interpolate.splrep(lambdas, pi0_arr, k=3)
+			pi0 = interpolate.splev(lambdas[-1], tck)
+		
+			if pi0 > 1: 
+				logger.write("got pi0 > 1 (%.3f) while estimating qvalues, setting it to 1" % pi0)
+				pi0 = 1
+		
+	assert(pi0 >= 0 and pi0 <= 1)
+	return 1 - pi0

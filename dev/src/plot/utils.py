@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -38,20 +39,101 @@ def clip_extreme_values_by_axis(df, axis):
 #----------------------------------------------------------------------------------------------------#
 # Heatmaps
 #----------------------------------------------------------------------------------------------------#
-def add_column_spacing(ax, color="white", linewidth=1, offset=0): 
+def add_column_spacing(ax, axis, color="white", linewidth=1, offset=0): 
 
-	ticks = ax.get_xticks()
-	for i in range(len(ticks) - 1): 
-		pos = (ticks[i] + ticks[i+1]) / 2 + offset
-		ax.axvline(pos, color=color, lw=linewidth)
-
-def sized_heatmap():
-	pass
+	if axis == "col":
+		ticks = ax.get_xticks()
+		for i in range(len(ticks) - 1): 
+			pos = (ticks[i] + ticks[i+1]) / 2 + offset
+			ax.axvline(pos, color=color, lw=linewidth)
+	else: 
+		ticks = ax.get_yticks()
+		for i in range(len(ticks) - 1): 
+			pos = (ticks[i] + ticks[i+1]) / 2 + offset
+			ax.axhline(pos, color=color, lw=linewidth)
 
 
 def _sized_heatmap_from_longform(data, x, y, hue, size, **kwargs): 
 
 	pass
+
+
+def map_continuous_colors(s, vmin=None, vmax=None, center=None, cmap='bwr'): 
+    if center == 0: 
+        abs_max = s.abs().max()
+        vmin, vmax = -abs_max, abs_max
+    else: 
+        vmin, vmax = s.min(), s.max()
+        
+    n_colors = 256
+    palette = sns.color_palette(cmap, n_colors=n_colors)
+    bin_colors = {i:palette[i] for i in range(n_colors)}
+    bin_colors[-1] = (0.5,0.5,0.5)
+    # bin_colors = {i:tuple(x*256 for x in val) for i,val in bin_colors.items()}
+    
+    bin_edges = np.linspace(vmin, vmax, num=n_colors+1)
+    # return bin_edges
+    
+    binned_vals = pd.cut(s, bins=bin_edges, labels=np.arange(n_colors), include_lowest=True).values.add_categories(-1).fillna(-1)
+    binned_vals = pd.Series(binned_vals, index=s.index).astype(int)
+    # return bin_colors
+    # return binned_vals, bin_colors
+    return binned_vals.map(bin_colors)
+
+
+
+def heatmap_with_sizes(vals_df, size_df, s_scale, ax):
+
+
+	# Mapping from column names to integer coordinates
+	xlabels, ylabels = vals_df.columns, vals_df.index
+	# xlabel_to_num = {label:i for i,label in enumerate(xlabels)}
+	xlabel_to_idx = pd.Series(index=xlabels, data=range(len(xlabels)))
+	ylabel_to_idx = pd.Series(index=ylabels, data=range(len(ylabels)))
+
+	vals_df = vals_df.reset_index()
+	vals_melted = vals_df.melt(id_vars=vals_df.columns[0])
+	vals_melted.columns = ["y", "x", "vals"]
+
+	colors = map_continuous_colors(vals_melted["vals"], center=0)
+
+	size_df = size_df.reset_index()
+	size_melted = size_df.melt(id_vars=size_df.columns[0])
+	size_melted.columns = ["y", "x", "sizes"]
+
+	ax.scatter(
+		x=vals_melted["x"].map(xlabel_to_idx),
+		y=vals_melted["y"].map(ylabel_to_idx),
+		s=size_melted["sizes"] * s_scale,
+		color=colors
+	)
+	sns.despine()
+	# return sns.scatterplot(
+	# 	x=vals_melted["x"].map(xlabel_to_idx),
+	# 	y=vals_melted["y"].map(ylabel_to_idx),
+	# 	color=colors, ax=ax
+	# )
+
+
+	
+	# x_labels = [v for v in sorted(x.unique())]
+	# y_labels = [v for v in sorted(y.unique())]
+	# x_to_num = {p[1]:p[0] for p in enumerate(x_labels)} 
+	# y_to_num = {p[1]:p[0] for p in enumerate(y_labels)} 
+	
+	# size_scale = 500
+	# ax.scatter(
+	# 	x=x.map(x_to_num), # Use mapping for x
+	# 	y=y.map(y_to_num), # Use mapping for y
+	# 	s=size * size_scale, # Vector of square sizes, proportional to size parameter
+	# 	marker='s' # Use square as scatterplot marker
+	# )
+	
+	# # Show column labels on the axes
+	# ax.set_xticks([x_to_num[v] for v in x_labels])
+	# ax.set_xticklabels(x_labels, rotation=45, horizontalalignment='right')
+	# ax.set_yticks([y_to_num[v] for v in y_labels])
+	# ax.set_yticklabels(y_labels)
 
 
 
@@ -103,8 +185,17 @@ class ColorMap:
 	@classmethod
 	def load_data(cls, data, order=None, **kwargs): 
 
-		labels = data.unique()
-		if order is None: labels = np.sort(labels)
+		# if data.dtype == "category": 
+		# 	try: 
+		# 		data = pd.to_numeric(data)
+		# 	except: 
+		data = data.astype(object)
+
+		if order is None: 
+			labels = data.unique()
+			labels = np.sort(labels)
+		else: 
+			labels = order
 
 		cls_obj = cls(labels, name=data.name, **kwargs)
 		cls_obj.data = data

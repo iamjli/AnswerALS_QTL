@@ -12,7 +12,7 @@ from src import logger
 from src.query import bam
 
 
-__all__ = ["Interval", "Regions"]
+__all__ = ["Interval", "Regions", "rsid_to_regions"]
 
 tag_parser = re.compile(r"(?P<chrom>chr.{1,2}):(?P<start>\d*)-(?P<end>\d*)_?(?P<strand>[+-]?)")
 
@@ -62,6 +62,8 @@ class Interval:
 	@classmethod
 	def load(cls, *args): 
 		"""Lazy loading."""
+		from src.load import data
+
 		if len(args) == 1 and isinstance(args[0], Interval): 
 			return args[0]
 		elif len(args) == 1 and isinstance(args[0], str): 
@@ -69,11 +71,27 @@ class Interval:
 				return cls.load_tag(args[0])
 			elif args[0].startswith("ENSG"): 
 				return cls.load_ensg(args[0])
+			elif args[0] in data.ensg.values: 
+				ensg = data.ensg.index[data.ensg == args[0]]
+				logger.update("Matches:", ", ".join(ensg)) 
+				return cls.load_ensg(ensg[0])
+			elif args[0].startswith('rs'): 
+				chrom, pos, *_ = data.rsid.loc[args[0]]
+				return cls(chrom, pos, pos+1, name=args[0])
 			else:
-				raise ValueError("Could not load Interval.")
+				try: 
+					chrom, start, end = args[0].split(':')[:3]
+					strand = args[0].split('_')[-1]
+					return cls("chr"+chrom, int(start), int(end), strand)
+				except:
+					raise ValueError("Could not load Interval.")
 		elif len(args) == 1 and isinstance(args[0], pd.Series): 
 			return cls(**args[0], name=args[0].name)
 		else: 
+			try: 
+				return cls(args[0])
+			except TypeError: 
+				pass
 			return cls(*args[0])
 
 	#----------------------------------------------------------------------------------------------------#
@@ -99,9 +117,9 @@ class Interval:
 	def as_tes(self):
 		return Interval(self.chrom, self.tes-1, self.tes, self.strand)
 
-	def get_pos(self, gf): 
+	def get_pos(self, gf="ref"): 
 		"""Access position by string or returns default genomic feature."""
-		if gf == "ref": gf = "tss" if self.is_stranded else "mid"
+		if gf == "ref" or gf is None: gf = "tss" if self.is_stranded else "mid"
 		return getattr(self, f"{gf}")
 
 	#----------------------------------------------------------------------------------------------------#
@@ -127,7 +145,7 @@ class Interval:
 	# Queries
 	#----------------------------------------------------------------------------------------------------#
 	def get_genotypes(self): 
-		from src.analysis import vcf
+		from src.query import vcf
 		return vcf.query_interval(self.chrom, self.start, self.end)
 
 	def get_rna_coverages(self): 
@@ -163,10 +181,13 @@ class Interval:
 		return self.chrom, self.start, self.end, self.strand
 
 	def as_dict(self):
-		return {"chrom": self.chrom, "start": self.start, "end": self.end, "strand": self.strand}
+		if self.is_stranded:
+			return {"chrom": self.chrom, "start": self.start, "end": self.end, "strand": self.strand}
+		else: 
+			return {"chrom": self.chrom, "start": self.start, "end": self.end}
 
 	def as_Regions(self):
-		interval_s = pd.Series(self.dict, name=self.tag)
+		interval_s = pd.Series(self.as_dict(), name=self.tag)
 		return Regions(interval_s.to_frame().T)
 
 	def __repr__(self): 
@@ -232,8 +253,9 @@ class Regions(pd.DataFrame):
 	#----------------------------------------------------------------------------------------------------#
 	# Intersect with other regions
 	#----------------------------------------------------------------------------------------------------#
-	def in_interval(self, chrom, start, end): 
-		return self[(self["chrom"] == "chrom") & (self["end"] > start) & (self["start"] < end)]
+	def in_interval(self, interval):
+		chrom, start, end = interval.as_tuple3() 
+		return self[(self["chrom"] == chrom) & (self["end"] > start) & (self["start"] < end)]
 
 	def overlap_with(self, other): 
 		"""Reports features that overlap with other."""
@@ -241,9 +263,20 @@ class Regions(pd.DataFrame):
 		overlap_idx = self.pr.overlap(other).__getattr__(self.index.name)
 		return self.reindex(overlap_idx)
 
-	def overlapping_idx(self, other, col_names=None, **kwargs): 
+	def overlapping_idx(self, other, report_distance=True, gf=None, col_names=None, **kwargs): 
 		"""Reports indices of overlapping intervals in self and other."""
-		return _get_overlapping_regions(self, other, col_names=col_names)
+		pairs_of_region_ids = _get_overlapping_regions(self, other, col_names=col_names)
+		if report_distance:
+			col1, col2 = pairs_of_region_ids.columns
+			col1_pos = pairs_of_region_ids[col1].map(self.get_pos(gf)).astype(np.float)
+			col2_pos = pairs_of_region_ids[col2].map(other.get_pos(gf)).astype(np.float)
+			pairs_of_region_ids[f"{col1[:-3]}_to_{col2[:-3]}_dist"] = (col1_pos - col2_pos).astype(int)
+		return pairs_of_region_ids
+
+	def nearest_idx(self, other, report_distance=True): 
+		nearest = self.pr.nearest(other.pr).as_df()
+		nearest = nearest[[self.index.name, other.index.name, "Distance"]].rename(columns={"Distance": "distance"})
+		return nearest
 
 	def adjacent_idx(self, hops): 
 		"""Reports pairs indices of adjacent intervals. Distance is set by `hops`."""
@@ -260,7 +293,7 @@ class Regions(pd.DataFrame):
 
 	def k_adjacent(self, interval, k=5, gf=None, report_distance=True): 
 		"""Gets the k nearest intervals in either direction."""
-		interval = unpack_interval_arg(interval)
+		# interval = unpack_interval_arg(interval)
 		contig_features = self[self["chrom"] == interval.chrom]
 		nearest_feature = contig_features.k_nearest(interval, k=1, gf=gf, report_distance=False).index[0]
 		nearest_idx = np.where(contig_features.index == nearest_feature)[0][0]
@@ -273,7 +306,7 @@ class Regions(pd.DataFrame):
 
 	def k_nearest(self, interval, k=10, gf=None, report_distance=True): 
 		"""Gets k nearest features by absolute distance."""
-		interval = unpack_interval_arg(interval)
+		# interval = unpack_interval_arg(interval)
 		distances = self.distances_from_interval(interval, gf=gf)
 		regions = self.reindex(distances.abs().sort_values()[:k].index).sort()
 		if report_distance: regions = regions.assign(distance=self.distances_from_interval(interval, gf=gf))
@@ -319,9 +352,9 @@ class Regions(pd.DataFrame):
 	#----------------------------------------------------------------------------------------------------#
 	@property
 	def tags(self): 
-		return self["chrom"] + ":" + self["start"].astype(str) + "-" + self["end"].astype(str)
+		return self["chrom"].astype(str) + ":" + self["start"].astype(str) + "-" + self["end"].astype(str)
 
-	def set_index_to_tags(self, name="peak_id"): 
+	def set_index_to_tags(self, name): 
 		new_regions = self.copy()
 		new_regions.index = self.tags
 		new_regions.index.name = name
@@ -421,14 +454,15 @@ class Regions(pd.DataFrame):
 	def get_pos(self, gf=None): 
 		"""Access position by string or returns default genomic feature."""
 		if gf is None: gf = "tss" if self.is_stranded else "mid"
-		return getattr(self, f"{gf}_pos")
+		return getattr(self, f"{gf}_pos").astype(int)
 
-
+	def lengths(self): 
+		return (self["end"] - self["start"]).astype(int)
 
 	def distances_from_interval(self, interval, gf): 
-		interval = unpack_interval_arg(interval)
+		# interval = unpack_interval_arg(interval)
 		target_positions = self[self["chrom"] == interval.chrom].get_pos(gf=gf)
-		distances = target_positions - interval.get_pos(gf=None)
+		distances = target_positions - interval.get_pos(gf=gf)
 		return distances*-1 if interval.strand == "-" else distances
 
 
@@ -437,6 +471,17 @@ def unpack_interval_arg(arg, regions=None):
 		return Interval.load(regions.loc[arg])
 	else: 
 		return Interval.load(arg)
+
+def rsid_to_regions(rsids): 
+
+	from src.load import data
+	rsid_pos = data.rsid.reindex(rsids)
+	regions = pd.concat({
+		"chrom": rsid_pos.chrom, 
+		"start": rsid_pos.pos, 
+		"end": rsid_pos.pos + 1,
+	}, axis=1)
+	return Regions(regions)
 
 #----------------------------------------------------------------------------------------------------#
 # BED operations
@@ -464,7 +509,7 @@ def _get_regions_id(obj):
 		assert len(additional_cols) == 1, "cannot determine regions id"
 		return additional_cols[0]
 	else: 
-		assert isinstance(obj, Regions), "input not formatted as pyranges or Regions object"
+		# if isinstance(obj, Regions): logger.update("input may not be formatted as pyranges or Regions object")
 		return obj.index.name
 
 def _format_input_as_pyranges(obj): 
@@ -472,7 +517,7 @@ def _format_input_as_pyranges(obj):
 	if isinstance(obj, pr.PyRanges): 
 		return obj
 	else: 
-		assert isinstance(obj, Regions), "input not formatted as pyranges or Regions object"
+		# if isinstance(obj, Regions): logger.update("input may not be formatted as pyranges or Regions object")
 		return obj.pr
 #----------------------------------------------------------------------------------------------------#
 # Utility functions

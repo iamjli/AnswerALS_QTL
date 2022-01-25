@@ -22,6 +22,8 @@ class Residualizer(object):
 			C_t = torch.tensor(C.values, dtype=torch.float32).to("cpu") 
 		elif isinstance(C, torch.Tensor): 
 			C_t = C
+		elif isinstance(C, np.ndarray): 
+			C_t = torch.tensor(C, dtype=torch.float).to("cpu")
 		else: 
 			logger.write("Must provide as dataframe or tensor.")
 
@@ -44,6 +46,9 @@ class Residualizer(object):
 		if isinstance(M, pd.DataFrame): 
 			input_format = "dataframe"
 			M_t = torch.tensor(M.values, dtype=torch.float).to("cpu")
+		elif isinstance(M, pd.Series): 
+			input_format = "series"
+			M_t = torch.tensor(M.to_frame().T.values, dtype=torch.float).to("cpu")
 		elif isinstance(M, np.ndarray): 
 			input_format = "array"
 
@@ -66,6 +71,8 @@ class Residualizer(object):
 
 		if input_format == "dataframe": 
 			return pd.DataFrame(M_t_transformed.numpy(), index=M.index, columns=M.columns)
+		elif input_format == "series": 
+			return pd.Series(data=M_t_transformed[0], index=M.index)
 		elif input_format == "array": 
 			M_t_transformed = M_t_transformed.numpy()
 			# return M_t_transformed

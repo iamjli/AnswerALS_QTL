@@ -46,6 +46,7 @@ class QueryBams:
 		"""
 		Check that a previous query has been cached. Returns subsetted array, otherwise None.
 		"""
+		if self._max_cache == 0: return None
 		# Compare query to every entry in the cache 
 		for cached_pileupdata_obj in self._pileup_cache: 
 			pileupdata_obj = cached_pileupdata_obj._compare_params_with(query_params)
@@ -58,7 +59,10 @@ class QueryBams:
 
 	def _update_pileup_cache(self, raw_pileups, query_params): 
 		"""Maintains cache."""
+
 		pileupdata_obj = PileupData(raw_pileups, query_params)
+		if self._max_cache == 0: return pileupdata_obj
+
 		self._pileup_cache.append(pileupdata_obj)
 
 		# TODO: Prune by removing those in subset
@@ -181,11 +185,14 @@ class PileupData:
 			data = self.raw[0]
 		elif strand == "neg": 
 			data = self.raw[1]
-		else: 
+		else:
 			raise ValueError
 
 		# Bin data
-		data, bin_positions = bin_pileup_data(data, self.positions, **view_kwargs)
+		if view_kwargs.pop("downsample", True):
+			data, bin_positions = bin_pileup_data(data, self.positions, **view_kwargs)
+		else: 
+			bin_positions = self.positions.copy()
 
 		# Normalize binned data
 		data = normalize_pileup_data(data, **norm_kwargs)
@@ -194,7 +201,7 @@ class PileupData:
 		if view_kwargs.pop("as_df", True): 
 
 			sample_names = view_kwargs.pop("sample_names", None)
-			zero_pos = view_kwargs.pop("zero_pos", None)
+			zero_pos = view_kwargs.pop("zero_pos", 0)
 
 			if zero_pos: bin_positions -= zero_pos
 
@@ -206,6 +213,8 @@ class PileupData:
 def bin_pileup_data(data, positions, n_bins=None, max_bins=1000, **kwargs): 
 
 	n_pos, n_samples = data.shape[0], data.shape[1]
+
+	if n_pos < max_bins: return data, positions
 
 	if n_bins is None:
 		n_bins = max_bins
@@ -260,7 +269,7 @@ def get_pileups_in_interval(bam_files, chrom, start, end, fill_deletions, n_cpus
 			else pysam_utils._get_pileups_from_interval_without_deletions)
 
 	results = multiprocess_wrapper(func, args, n_cpus=n_cpus)
-	results_np = np.zeros((*results[0].shape, len(results)))
+	results_np = np.zeros((*results[0].shape, len(results)), dtype=int)
 	for i,result in enumerate(results): 
 		results_np[:,:,i] = result
 	return results_np

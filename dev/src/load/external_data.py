@@ -3,20 +3,34 @@
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 
 from src import base_dir, logger
 
 
+# _external_data_paths = {
+# 	# "rsid": base_dir / "tensorqtl_runs/genomes_210409/snp_list.biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.pkl",
+# 	"rsid": base_dir / "tensorqtl_runs/genomes_210409/snp_positions.biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.pickle",
+# 	"ensg": base_dir / "data/external/ENSG_to_symbol.tsv", 
+# 	"snp2tf": base_dir / "data/external/SNP2TF/snp2tfbs_JASPAR_CORE_2014_vert.bed.gz",
+# 	"open_targets": base_dir / "data/external/targets_associated_with_amyotrophic_lateral_sclerosis.csv", 
+# 	"pe_eqtl": base_dir / "data/external/PsychENCODE/DER-08a_hg38_eQTL.significant.txt",
+# 	"pe_enhancers": base_dir / "data/external/PsychENCODE/DER-04a_hg38lft_PEC_enhancers.bed", 
+# 	# "project_mine": base_dir / "data/external/Summary_Statistics_GWAS_2016/als.sumstats.lmm.parquet",
+# 	"project_mine": base_dir / "data/external/Summary_Statistics_GWAS_2016/processed_rsid_210409.als.sumstats.lmm.pickle",
+# 	"encode_tfs": base_dir / "data/external/encode_TFs_bed/combined_peaks.bed",
+# }
+
 _external_data_paths = {
 	# "rsid": base_dir / "tensorqtl_runs/genomes_210409/snp_list.biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.pkl",
-	"rsid": base_dir / "tensorqtl_runs/genomes_210409/snp_positions.biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.pickle",
+	"rsid": base_dir / "tensorqtl_runs/beagle5_210512/filt_anno/snp_list.biallelic_known_snps.harmonized.VQSR_filtered_99.rsID.GT_only.pickle",
 	"ensg": base_dir / "data/external/ENSG_to_symbol.tsv", 
 	"snp2tf": base_dir / "data/external/SNP2TF/snp2tfbs_JASPAR_CORE_2014_vert.bed.gz",
 	"open_targets": base_dir / "data/external/targets_associated_with_amyotrophic_lateral_sclerosis.csv", 
 	"pe_eqtl": base_dir / "data/external/PsychENCODE/DER-08a_hg38_eQTL.significant.txt",
 	"pe_enhancers": base_dir / "data/external/PsychENCODE/DER-04a_hg38lft_PEC_enhancers.bed", 
-	"project_mine": base_dir / "data/external/Summary_Statistics_GWAS_2016/als.sumstats.lmm.parquet",
-	"project_mine_hg38": base_dir / "data/external/Summary_Statistics_GWAS_2016/als.sumstats.lmm.hg38.parquet", 
+	# "project_mine": base_dir / "data/external/Summary_Statistics_GWAS_2016/als.sumstats.lmm.parquet",
+	"project_mine": base_dir / "210615_analysis_phased/processed_data/processed_rsid_210615.als.sumstats.lmm.pickle",
 	"encode_tfs": base_dir / "data/external/encode_TFs_bed/combined_peaks.bed",
 }
 
@@ -109,6 +123,24 @@ def _load_ensg(path):
 
 def _load_snp2tf(path, collapse=True): 
 	"""Load TF annotations for SNPs."""
+
+	# df = pd.read_csv("../data/external/SNP2TF/snp2tfbs_JASPAR_CORE_2014_vert.bed.gz", sep='\t', names=['chrom', 'start', 'end', 'ref', 'alt', 'variant_id', 'matches', 'tfs', 'scores'])
+
+	# df['variant_id'] = df['variant_id'].str.split(';')
+	# df = explode(df, 'variant_id')
+
+	# df['tfs'] = df['tfs'].str.split(',')
+	# df['scores'] = df['scores'].str.split(',')
+	# df = explode(df, ['tfs', 'scores'])
+	# df['scores'] = df['scores'].astype(int)
+
+	# df = df.merge(rsid, left_on='variant_id', right_index=True)
+
+	# df = pd.concat([
+	#     df.query('ref_x == ref_y & alt_x == alt_y')[['variant_id', 'tfs', 'scores']], 
+	#     df.query('ref_x == alt_y & alt_x == ref_y')[['variant_id', 'tfs', 'scores']].assign(scores=lambda df: df['scores'] * -1)
+	# ])
+	
 	import gzip
 
 	logger.write("Loading snp2tf annotations...")
@@ -152,12 +184,32 @@ def _load_psychencode_enhancers(path):
 
 def _load_project_mine(path): 
 	logger.write("Loading Project MinE GWAS...")
-	return pd.read_parquet(path)
+	return pd.read_pickle(path)
 
 def _load_encode_tfs(path): 
 	logger.write("Loading ENCODE merged TFs...")
 	import pyranges as pr
 	return pr.read_bed(str(path))
+
+
+
+def _process_PM_gwas(path, rsid): 
+
+	gwas = pd.read_parquet(path)
+	gwas = gwas[gwas.index.isin(rsid.index)]
+
+	_Ncases = 12577
+	_Ncontrols = 23475
+	_Pcase = _Ncases / (_Ncases + _Ncontrols)
+
+	gwas["b"] *= -1  # slope now refers to a2. If positive, a2 occurs more frequently in ALS compared to CTR
+	gwas.loc[gwas.a1 != gwas.index.map(rsid["ref"]), "b"] *= -1  # use alt allele from rsID. If mismatch, change slope
+	gwas["LOD"] = np.log(((_Pcase + gwas.b) / (1 - _Pcase - gwas.b)) / (_Pcase / (1 - _Pcase)))
+
+	gwas["a1"] = gwas["a1"].astype("category")
+	gwas["a2"] = gwas["a2"].astype("category")
+
+	return gwas.drop(columns=["chr", "bp"])
 
 #----------------------------------------------------------------------------------------------------#
 data = ExternalData(_external_data_paths)
